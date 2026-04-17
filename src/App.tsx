@@ -3,16 +3,16 @@ import './styles.css';
 import { req, ApiError } from './lib/api';
 import { loadState, saveState, API_BASE } from './lib/storage';
 import type {
-  AdminSummary, AdminUser, PublisherAccess, PublisherInvitation, PublisherMember,
-  PublisherPlugin, PublisherRelease, ReviewQueueItem, ReviewQueueSummary,
+  AdminSummary, AdminUser,
+  PublisherPlugin, PublisherPublishResponse, PublisherRelease, ReviewQueueItem, ReviewQueueSummary,
   RuntimeStatus, SessionResponse, SessionUser,
 } from './lib/types';
 
 // ─── utils ────────────────────────────────────────────────────────────
 type Theme = 'dark' | 'light';
 type Toast = { id: number; kind: 'ok' | 'err' | 'inf'; msg: string };
-type AdminPage = 'dash' | 'plugins-admin' | 'users' | 'reviews';
-type UserPage  = 'profile' | 'plugins' | 'releases' | 'my-reviews';
+type AdminPage = 'dash' | 'publish' | 'plugins-admin' | 'users' | 'reviews';
+type UserPage  = 'publish' | 'my-reviews' | 'profile';
 
 function fmtDate(v?: string | null) {
   if (!v) return '—';
@@ -31,9 +31,28 @@ function pluginColor(key: string) {
   return c[h % c.length];
 }
 function publisherLabel(trust?: string | null, slug?: string): { cls: string; text: string } {
-  if (slug === 'local-studio' || trust === 'internal') return { cls: 'lbl-core', text: '⬡ Core' };
-  if (trust === 'official' || trust === 'verified') return { cls: 'lbl-official', text: '★ Official' };
+  const normalized = (trust || '').toLowerCase();
+  if (slug === 'local-studio' || normalized === 'core' || normalized === 'internal') return { cls: 'lbl-core', text: '⬡ Core' };
+  if (normalized === 'official' || normalized === 'verified') return { cls: 'lbl-official', text: '★ Official' };
   return { cls: 'lbl-community', text: '◈ Community' };
+}
+function splitCsvLike(value: string) {
+  return value.split(/[,\n]/).map(v => v.trim()).filter(Boolean);
+}
+function isLspkgFile(file: File | null | undefined) {
+  return !!file && file.name.toLowerCase().endsWith('.lspkg');
+}
+function isAllowedYoutubeUrl(raw: string) {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    return u.protocol === 'https:' && ['youtube.com','www.youtube.com','m.youtube.com','youtu.be'].includes(host);
+  } catch {
+    return false;
+  }
+}
+function derivePluginType(slug?: string, trust?: string | null) {
+  return publisherLabel(trust, slug);
 }
 function statusLbl(v?: string | null): { cls: string; text: string } {
   const s = (v || 'unknown').toLowerCase().replace(/[- ]/g, '_');
@@ -82,7 +101,7 @@ export default function App() {
 
   // pages
   const [aPage, setAPage] = useState<AdminPage>('dash');
-  const [uPage, setUPage] = useState<UserPage>('plugins');
+  const [uPage, setUPage] = useState<UserPage>('publish');
 
   // data
   const [summary, setSummary]         = useState<AdminSummary | null>(null);
@@ -91,8 +110,6 @@ export default function App() {
   const [myPlugins, setMyPlugins]     = useState<PublisherPlugin[]>([]);
   const [releases, setReleases]       = useState<PublisherRelease[]>([]);
   const [myReleases, setMyReleases]   = useState<PublisherRelease[]>([]);
-  const [members, setMembers]         = useState<PublisherMember[]>([]);
-  const [invites, setInvites]         = useState<PublisherInvitation[]>([]);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
   const [reviewSummary, setRQSummary] = useState<ReviewQueueSummary | null>(null);
   const [adminUsers, setAdminUsers]   = useState<AdminUser[]>([]);
@@ -105,12 +122,14 @@ export default function App() {
   const [userSearch, setUserSearch]   = useState('');
   const [userFilter, setUserFilter]   = useState('all');
   const [releaseKey, setReleaseKey]   = useState('');
-  const [showPluginModal, setShowPluginModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
   const [confirmCtx, setConfirmCtx]   = useState<{ title: string; body: string; onOk: () => void } | null>(null);
-  const [pluginForm, setPluginForm]   = useState({ key: '', name: '', desc: '', trust: 'community', vis: 'public', surface: 'default', tags: '', cats: '', caps: '' });
-  const [inviteForm, setInviteForm]   = useState({ email: '', role: 'member', notes: '', days: 7 });
-  const [releaseForm, setReleaseForm] = useState({ channel: 'stable', log: '', file: null as File | null });
+  const [publishForm, setPublishForm] = useState({
+    pluginKey: '', name: '', description: '', homepageUrl: '', documentationUrl: '',
+    tags: '', categories: '', capabilities: '', changelog: '', videoLinks: '',
+    packageFile: null as File | null, iconFile: null as File | null, imageFiles: [] as File[],
+  });
+  const [publishDrag, setPublishDrag] = useState<{ package: boolean; icon: boolean; images: boolean }>({ package: false, icon: false, images: false });
   const [pwForm, setPwForm]           = useState({ current: '', next: '', confirm: '' });
   const [loginForm, setLoginForm]     = useState({ ident: '', pw: '' });
   const [regForm, setRegForm]         = useState({ user: '', email: '', pw: '', pw2: '' });
@@ -273,49 +292,81 @@ export default function App() {
       setMyPlugins(d);
     });
   }
-  async function savePlugin(e: FormEvent) {
+  async function publishPlugin(e: FormEvent) {
     e.preventDefault();
-    await run('save-plugin', async () => {
-      await req<PublisherPlugin>('/api/v1/publishers/plugins', {
-        method: 'POST', ...auth({ pub: true }),
-        body: { plugin_key: pluginForm.key, display_name: pluginForm.name, description: pluginForm.desc || null,
-          trust_level: pluginForm.trust, visibility: pluginForm.vis, product_surface: pluginForm.surface,
-          tags: pluginForm.tags.split(',').map(s=>s.trim()).filter(Boolean),
-          categories: pluginForm.cats.split(',').map(s=>s.trim()).filter(Boolean),
-          capabilities: pluginForm.caps.split(',').map(s=>s.trim()).filter(Boolean),
-          metadata: {}, install_policy: {}, update_channels: {} },
+    if (!publishForm.packageFile) { toast('err', 'Select a .lspkg package first.'); return; }
+    if (!isLspkgFile(publishForm.packageFile)) { toast('err', 'Only .lspkg packages are supported.'); return; }
+    const videos = splitCsvLike(publishForm.videoLinks);
+    if (videos.some(link => !isAllowedYoutubeUrl(link))) {
+      toast('err', 'Only HTTPS YouTube links are allowed.');
+      return;
+    }
+
+    const packageFile = publishForm.packageFile;
+
+    await run('publish', async () => {
+      const fd = new FormData();
+      fd.append('plugin_key', publishForm.pluginKey.trim());
+      fd.append('display_name', publishForm.name.trim());
+      if (publishForm.description.trim()) fd.append('description', publishForm.description.trim());
+      if (publishForm.homepageUrl.trim()) fd.append('homepage_url', publishForm.homepageUrl.trim());
+      if (publishForm.documentationUrl.trim()) fd.append('documentation_url', publishForm.documentationUrl.trim());
+      if (publishForm.tags.trim()) fd.append('tags', publishForm.tags);
+      if (publishForm.categories.trim()) fd.append('categories', publishForm.categories);
+      if (publishForm.capabilities.trim()) fd.append('capabilities', publishForm.capabilities);
+      if (publishForm.videoLinks.trim()) fd.append('video_links', publishForm.videoLinks);
+      if (publishForm.changelog.trim()) fd.append('changelog', publishForm.changelog.trim());
+      fd.append('package', packageFile);
+      if (publishForm.iconFile) fd.append('icon', publishForm.iconFile);
+      for (const image of publishForm.imageFiles) fd.append('images', image);
+
+      const response = await req<PublisherPublishResponse>('/api/v1/publishers/publish', {
+        method: 'POST', ...auth({ pub: true }), body: fd, isForm: true,
       });
-      setPluginForm({ key:'',name:'',desc:'',trust:'community',vis:'public',surface:'default',tags:'',cats:'',caps:'' });
-      setShowPluginModal(false);
-      await loadMyPlugins();
-      toast('ok', `Plugin "${pluginForm.name}" created!`);
+
+      setPublishForm({
+        pluginKey: response.plugin.plugin_key,
+        name: response.plugin.display_name,
+        description: response.plugin.description || '',
+        homepageUrl: response.plugin.homepage_url || '',
+        documentationUrl: response.plugin.documentation_url || '',
+        tags: (response.plugin.tags || []).join(', '),
+        categories: (response.plugin.categories || []).join(', '),
+        capabilities: (response.plugin.capabilities || []).join(', '),
+        changelog: '',
+        videoLinks: (response.plugin.video_links || []).join('\n'),
+        packageFile: null,
+        iconFile: null,
+        imageFiles: [],
+      });
+      await Promise.all([loadMyPlugins(), loadMyReleases(), loadReleases(response.plugin.plugin_key)]);
+      setReleaseKey(response.plugin.plugin_key);
+      toast('ok', `Published ${response.plugin.display_name} v${response.release.version}.`);
     });
   }
 
-  // ── USER: Releases ───────────────────────────────────────────────
   async function loadReleases(key?: string) {
     const pk = (key ?? releaseKey).trim();
-    if (!pk) { toast('err', 'Enter a plugin key first.'); return; }
+    if (!pk) { return; }
     await run('releases', async () => {
       const d = await req<PublisherRelease[]>(`/api/v1/publishers/plugins/${pk}/releases`, auth({ pub: true }));
       setReleases(d); if (key) setReleaseKey(key);
     });
   }
-  async function uploadRelease(e: FormEvent) {
-    e.preventDefault();
-    if (!releaseForm.file) { toast('err', 'Select a .lspkg file first.'); return; }
-    await run('upload', async () => {
-      const fd = new FormData();
-      fd.append('file', releaseForm.file!);
-      if (releaseForm.channel) fd.append('release_channel', releaseForm.channel);
-      if (releaseForm.log) fd.append('changelog', releaseForm.log);
-      const r = await req<PublisherRelease>('/api/v1/publishers/releases', {
-        method: 'POST', ...auth({ pub: true }), body: fd, isForm: true,
-      });
-      setReleaseForm(p => ({ ...p, file: null, log: '' }));
-      await loadReleases(r.plugin_key);
-      toast('ok', `Release v${r.version} uploaded!`);
-    });
+
+  function onPackageSelected(file: File | null) {
+    if (!file) return;
+    if (!isLspkgFile(file)) { toast('err', 'Only .lspkg packages are supported.'); return; }
+    setPublishForm(p => ({ ...p, packageFile: file }));
+  }
+  function onIconSelected(file: File | null) {
+    if (!file) return;
+    setPublishForm(p => ({ ...p, iconFile: file }));
+  }
+  function onImagesSelected(files: FileList | File[] | null) {
+    if (!files) return;
+    const next = Array.from(files).filter(Boolean);
+    setPublishForm(p => ({ ...p, imageFiles: next }));
   }
 
   // ── USER: My Reviews (releases of my plugins) ────────────────────
@@ -352,12 +403,12 @@ export default function App() {
     if (!isLoggedIn) return;
     if (isAdmin) {
       if (aPage === 'dash') loadDash();
+      if (aPage === 'publish') { loadMyPlugins(); loadMyReleases(); }
       if (aPage === 'plugins-admin') loadAllPlugins();
       if (aPage === 'users') loadUsers();
       if (aPage === 'reviews') loadReviews();
     } else {
-      if (uPage === 'plugins') loadMyPlugins();
-      if (uPage === 'releases') loadMyPlugins();
+      if (uPage === 'publish') { loadMyPlugins(); loadMyReleases(); }
       if (uPage === 'my-reviews') loadMyReleases();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -366,7 +417,7 @@ export default function App() {
   // ── filtered plugins ─────────────────────────────────────────────
   const displayPlugins = useMemo(() => {
     let list = isAdmin ? allPlugins : myPlugins;
-    if (pluginFilter !== 'all') list = list.filter(p => p.trust_level === pluginFilter || (pluginFilter === 'internal' && p.internal));
+    if (pluginFilter !== 'all') list = list.filter(p => (p.plugin_type || p.trust_level) === pluginFilter || (pluginFilter === 'core' && p.internal));
     if (pluginSearch) {
       const q = pluginSearch.toLowerCase();
       list = list.filter(p => p.display_name.toLowerCase().includes(q) || p.plugin_key.toLowerCase().includes(q));
@@ -433,23 +484,26 @@ export default function App() {
   // ═════════════════════════════════════════════════════════════════
   // MAIN APP
   // ═════════════════════════════════════════════════════════════════
-  const adminNav = [
+  const adminNav: Array<{ key: AdminPage; icon: string; label: string; section?: string; badge?: number }> = [
     { key: 'dash',         icon: '⬡', label: 'Dashboard',    section: 'Overview' },
+    { key: 'publish',      icon: '⇪', label: 'Publish',      section: 'Publishing' },
     { key: 'plugins-admin',icon: '⊞', label: 'All Plugins',  section: 'Admin' },
     { key: 'users',        icon: '◎', label: 'Users' },
     { key: 'reviews',      icon: '⟳', label: 'Reviews', badge: reviewQueue.length > 0 ? reviewQueue.length : undefined },
-  ] as const;
+  ];
 
-  const userNav = [
-    { key: 'plugins',     icon: '⬡', label: 'My Plugins',   section: 'Publisher' },
-    { key: 'releases',    icon: '↑', label: 'Releases' },
+  const userNav: Array<{ key: UserPage; icon: string; label: string; section?: string }> = [
+    { key: 'publish',     icon: '⇪', label: 'Publish',     section: 'Publisher' },
     { key: 'my-reviews',  icon: '⟳', label: 'Reviews' },
     { key: 'profile',     icon: '◉', label: 'Profile',       section: 'Account' },
-  ] as const;
+  ];
 
   const curPageTitle = isAdmin
-    ? { dash: 'Dashboard', 'plugins-admin': 'All Plugins', users: 'User Management', reviews: 'Release Reviews' }[aPage]
-    : { plugins: 'My Plugins', releases: 'Releases', 'my-reviews': 'My Reviews', profile: 'Profile' }[uPage];
+    ? { dash: 'Dashboard', publish: 'Publish Plugins', 'plugins-admin': 'All Plugins', users: 'User Management', reviews: 'Release Reviews' }[aPage]
+    : { publish: 'Publish Plugins', 'my-reviews': 'My Reviews', profile: 'Profile' }[uPage];
+
+  const showPublishPage = (isAdmin && aPage === 'publish') || (!isAdmin && uPage === 'publish');
+  const publishTypePreview = derivePluginType(pubSlug === 'local-studio' ? 'core' : undefined, pubSlug);
 
   return (
     <div className="app-shell">
@@ -526,7 +580,7 @@ export default function App() {
             {isAdmin && aPage === 'plugins-admin' && <button className="btn btn-secondary btn-sm" disabled={isBusy('all-plugins')} onClick={loadAllPlugins}>{isBusy('all-plugins') ? <Spin /> : '⟳'}</button>}
             {isAdmin && aPage === 'users' && <button className="btn btn-secondary btn-sm" onClick={() => exportCsv('users.csv', ['ID','Username','Email','Status','Created'], adminUsers.map(u => [u.id,u.username,u.email,u.status,u.created_at??'']))}>↓ CSV</button>}
             {isAdmin && aPage === 'reviews' && <button className="btn btn-secondary btn-sm" disabled={isBusy('reviews')} onClick={loadReviews}>{isBusy('reviews') ? <Spin /> : '⟳ Refresh'}</button>}
-            {!isAdmin && uPage === 'plugins' && <button className="btn btn-primary btn-sm" onClick={() => setShowPluginModal(true)}>+ New plugin</button>}
+            {((isAdmin && aPage === 'publish') || (!isAdmin && uPage === 'publish')) && <button className="btn btn-secondary btn-sm" disabled={isBusy('publish')} onClick={() => { loadMyPlugins(); loadMyReleases(); }}>{isBusy('publish') ? <Spin /> : '⟳ Refresh'}</button>}
             {/* theme toggle */}
             <button className="theme-toggle" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Toggle theme">
               {theme === 'dark' ? '☀️' : '🌙'}
@@ -604,6 +658,183 @@ export default function App() {
             )}
 
             {/* ══════════════════════════════════════════════════════
+                PUBLISH — COMBINED PLUGIN + RELEASE FLOW
+            ══════════════════════════════════════════════════════ */}
+            {showPublishPage && (
+              <div className="vstack">
+                <div className="ph">
+                  <div>
+                    <div className="ph-title">Publish plugin package</div>
+                    <div className="ph-sub">Single flow for plugin metadata + release upload. Plugin type is assigned automatically as Core, Official, or Community.</div>
+                  </div>
+                  <div className="row" style={{gap:8}}>
+                    <span className={`lbl ${publishTypePreview.cls}`}>{publishTypePreview.text}</span>
+                    <span className="lbl lbl-public">public</span>
+                  </div>
+                </div>
+
+                <div className="g2 publish-layout">
+                  <div className="card">
+                    <div className="card-head">
+                      <div>
+                        <div className="card-title">Publish</div>
+                        <div className="card-sub">Only <span className="tbl-mono">.lspkg</span> packages are accepted.</div>
+                      </div>
+                    </div>
+                    <div className="card-body">
+                      <form onSubmit={publishPlugin} className="vstack">
+                        <div className="grid2-form">
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Plugin key *</label>
+                            <input className="input" required value={publishForm.pluginKey} onChange={e => setPublishForm(p => ({ ...p, pluginKey: e.target.value }))} placeholder="vendor.category.name" />
+                          </div>
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Display name *</label>
+                            <input className="input" required value={publishForm.name} onChange={e => setPublishForm(p => ({ ...p, name: e.target.value }))} placeholder="My Plugin" />
+                          </div>
+                        </div>
+
+                        <div className="field">
+                          <label className="field-label">Description</label>
+                          <textarea className="textarea" rows={3} value={publishForm.description} onChange={e => setPublishForm(p => ({ ...p, description: e.target.value }))} placeholder="What does this plugin do?" />
+                        </div>
+
+                        <div className="grid2-form">
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Homepage</label>
+                            <input className="input" value={publishForm.homepageUrl} onChange={e => setPublishForm(p => ({ ...p, homepageUrl: e.target.value }))} placeholder="https://example.com" />
+                          </div>
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Documentation</label>
+                            <input className="input" value={publishForm.documentationUrl} onChange={e => setPublishForm(p => ({ ...p, documentationUrl: e.target.value }))} placeholder="https://docs.example.com" />
+                          </div>
+                        </div>
+
+                        <div className="grid3-form">
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Tags</label>
+                            <input className="input" value={publishForm.tags} onChange={e => setPublishForm(p => ({ ...p, tags: e.target.value }))} placeholder="audio, transcribe" />
+                          </div>
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Categories</label>
+                            <input className="input" value={publishForm.categories} onChange={e => setPublishForm(p => ({ ...p, categories: e.target.value }))} placeholder="speech, media" />
+                          </div>
+                          <div className="field" style={{margin:0}}>
+                            <label className="field-label">Capabilities</label>
+                            <input className="input" value={publishForm.capabilities} onChange={e => setPublishForm(p => ({ ...p, capabilities: e.target.value }))} placeholder="tts, voice_clone" />
+                          </div>
+                        </div>
+
+                        <div className="field">
+                          <label className="field-label">YouTube links</label>
+                          <textarea className="textarea" rows={3} value={publishForm.videoLinks} onChange={e => setPublishForm(p => ({ ...p, videoLinks: e.target.value }))} placeholder={"One per line or comma separated\nhttps://www.youtube.com/watch?v=..."} />
+                          <span className="field-hint">Only HTTPS links from YouTube are accepted.</span>
+                        </div>
+
+                        <div className="field">
+                          <label className="field-label">Release notes</label>
+                          <textarea className="textarea" rows={3} value={publishForm.changelog} onChange={e => setPublishForm(p => ({ ...p, changelog: e.target.value }))} placeholder="What changed in this release?" />
+                        </div>
+
+                        <div className="grid3-form publish-assets">
+                          <FileDropZone
+                            label="Package (.lspkg) *"
+                            hint={publishForm.packageFile ? publishForm.packageFile.name : 'Drop or browse your packaged plugin'}
+                            accept=".lspkg"
+                            dragActive={publishDrag.package}
+                            multiple={false}
+                            onDragChange={(active) => setPublishDrag(s => ({ ...s, package: active }))}
+                            onFiles={(files) => onPackageSelected(files[0] ?? null)}
+                          />
+                          <FileDropZone
+                            label="Icon (optional)"
+                            hint={publishForm.iconFile ? publishForm.iconFile.name : 'PNG, JPG, WEBP or GIF'}
+                            accept=".png,.jpg,.jpeg,.webp,.gif"
+                            dragActive={publishDrag.icon}
+                            multiple={false}
+                            onDragChange={(active) => setPublishDrag(s => ({ ...s, icon: active }))}
+                            onFiles={(files) => onIconSelected(files[0] ?? null)}
+                          />
+                          <FileDropZone
+                            label="Images (optional)"
+                            hint={publishForm.imageFiles.length ? `${publishForm.imageFiles.length} image(s) selected` : 'Drag one or more preview images'}
+                            accept=".png,.jpg,.jpeg,.webp,.gif"
+                            dragActive={publishDrag.images}
+                            multiple
+                            onDragChange={(active) => setPublishDrag(s => ({ ...s, images: active }))}
+                            onFiles={(files) => onImagesSelected(files)}
+                          />
+                        </div>
+
+                        {(publishForm.packageFile || publishForm.iconFile || publishForm.imageFiles.length > 0) && (
+                          <div className="publish-file-list">
+                            {publishForm.packageFile && <span className="tag">package · {publishForm.packageFile.name}</span>}
+                            {publishForm.iconFile && <span className="tag">icon · {publishForm.iconFile.name}</span>}
+                            {publishForm.imageFiles.map(file => <span key={file.name + file.size} className="tag">image · {file.name}</span>)}
+                          </div>
+                        )}
+
+                        <div className="alert alert-info">Trust Level, Visibility, and Channel are assigned by backend policy. Visibility is always public.</div>
+
+                        <button className="btn btn-primary btn-full" type="submit" disabled={isBusy('publish') || !publishForm.packageFile}>
+                          {isBusy('publish') ? <><Spin/> Publishing…</> : 'Publish plugin'}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+
+                  <div className="vstack">
+                    <div className="card">
+                      <div className="card-head">
+                        <div>
+                          <div className="card-title">My plugins</div>
+                          <div className="card-sub">Pick one to inspect its releases.</div>
+                        </div>
+                      </div>
+                      {myPlugins.length === 0 ? (
+                        <div className="empty">
+                          <div className="empty-icon">⬡</div>
+                          <div className="empty-title">No plugins yet</div>
+                          <div className="empty-sub">Your published plugins will appear here.</div>
+                        </div>
+                      ) : (
+                        <PluginGrid plugins={displayPlugins} onReleasesClick={(pk) => loadReleases(pk)} />
+                      )}
+                    </div>
+
+                    <div className="card">
+                      <div className="card-head">
+                        <div>
+                          <div className="card-title">Release history</div>
+                          <div className="card-sub">{releaseKey || 'Select a plugin to inspect releases'}</div>
+                        </div>
+                        <button className="btn btn-secondary btn-sm" disabled={isBusy('releases') || !releaseKey} onClick={() => loadReleases()}>
+                          {isBusy('releases') ? <Spin/> : '⟳'}
+                        </button>
+                      </div>
+                      {releases.length === 0 ? (
+                        <div className="empty">
+                          <div className="empty-icon">↑</div>
+                          <div className="empty-title">No releases loaded</div>
+                          <div className="empty-sub">Publish a plugin or select one from the list.</div>
+                        </div>
+                      ) : (
+                        <div style={{padding:12,display:'flex',flexDirection:'column',gap:8}}>
+                          {releases.map(r => (
+                            <div className="li" key={r.release_id}>
+                              <div className="li-left"><div className="li-name">v{r.version}</div><div className="li-sub">{fmtDT(r.created_at)}</div></div>
+                              <div className="li-actions">{r.release_channel && <Lbl v={r.release_channel}/>}<Lbl v={r.status}/>{r.review_state && <Lbl v={r.review_state}/>}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ══════════════════════════════════════════════════════
                 ADMIN — ALL PLUGINS
             ══════════════════════════════════════════════════════ */}
             {isAdmin && aPage === 'plugins-admin' && (
@@ -614,20 +845,20 @@ export default function App() {
                     <input placeholder="Search plugins…" value={pluginSearch} onChange={e => setPluginSearch(e.target.value)} />
                   </div>
                   <div className="chips">
-                    {['all','community','verified','trusted','internal'].map(f => (
+                    {['all','core','official','community'].map(f => (
                       <button key={f} className={`chip${pluginFilter===f?' on':''}`} onClick={() => setPluginFilter(f)}>
                         {f.charAt(0).toUpperCase()+f.slice(1)}
                       </button>
                     ))}
                   </div>
                   <div className="spacer" />
-                  <button className="btn btn-secondary btn-sm" onClick={() => exportCsv('plugins.csv', ['ID','Key','Name','Publisher','Trust','Visibility'], displayPlugins.map(p=>[p.id,p.plugin_key,p.display_name,p.publisher_slug,p.trust_level,p.visibility]))}>↓ CSV</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => exportCsv('plugins.csv', ['ID','Key','Name','Publisher','Type','Visibility'], displayPlugins.map(p=>[p.id,p.plugin_key,p.display_name,p.publisher_slug,p.plugin_type || p.trust_level,p.visibility]))}>↓ CSV</button>
                 </div>
                 {isBusy('all-plugins') && displayPlugins.length === 0
                   ? <div className="card"><div className="empty"><Spin /><div className="empty-sub">Loading…</div></div></div>
                   : displayPlugins.length === 0
                   ? <div className="card"><div className="empty"><div className="empty-icon">⬡</div><div className="empty-title">No plugins found</div></div></div>
-                  : <PluginGrid plugins={displayPlugins} onReleasesClick={(pk) => { setReleaseKey(pk); toast('inf', `Switch to Releases tab to view ${pk}`); }} adminActions={(p) => (
+                  : <PluginGrid plugins={displayPlugins} onReleasesClick={(pk) => { setReleaseKey(pk); setAPage('publish'); loadReleases(pk); }} adminActions={(p) => (
                     <div style={{display:'flex',gap:6,marginTop:8}}>
                       <button className="btn btn-gold btn-sm" onClick={() => setOfficial(p.publisher_slug, true)} disabled={isBusy(`off-${p.publisher_slug}`)}>★ Official</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => setOfficial(p.publisher_slug, false)} disabled={isBusy(`off-${p.publisher_slug}`)}>◈ Community</button>
@@ -744,79 +975,6 @@ export default function App() {
               </div>
             )}
 
-            {/* ══════════════════════════════════════════════════════
-                USER — MY PLUGINS
-            ══════════════════════════════════════════════════════ */}
-            {!isAdmin && uPage === 'plugins' && (
-              <div>
-                <div className="toolbar">
-                  <div className="searchbar"><span className="searchbar-icon">⌕</span><input placeholder="Search my plugins…" value={pluginSearch} onChange={e => setPluginSearch(e.target.value)} /></div>
-                  <div className="chips">
-                    {['all','community','verified'].map(f => <button key={f} className={`chip${pluginFilter===f?' on':''}`} onClick={() => setPluginFilter(f)}>{f.charAt(0).toUpperCase()+f.slice(1)}</button>)}
-                  </div>
-                  <div className="spacer"/>
-                  <button className="btn btn-secondary btn-sm" disabled={isBusy('my-plugins')} onClick={loadMyPlugins}>{isBusy('my-plugins') ? <Spin/> : '⟳'}</button>
-                </div>
-                {displayPlugins.length === 0
-                  ? <div className="card"><div className="empty"><div className="empty-icon">⬡</div><div className="empty-title">{myPlugins.length===0?'No plugins yet':'No results'}</div><div className="empty-sub">{myPlugins.length===0?'Create your first plugin.':'Try a different search.'}</div>{myPlugins.length===0 && <button className="btn btn-primary btn-sm" style={{marginTop:10}} onClick={() => setShowPluginModal(true)}>+ New plugin</button>}</div></div>
-                  : <PluginGrid plugins={displayPlugins} onReleasesClick={(pk) => { setReleaseKey(pk); setUPage('releases'); }} />
-                }
-              </div>
-            )}
-
-            {/* ══════════════════════════════════════════════════════
-                USER — RELEASES
-            ══════════════════════════════════════════════════════ */}
-            {!isAdmin && uPage === 'releases' && (
-              <div className="g2">
-                <div className="card">
-                  <div className="card-head"><div className="card-title">Upload release</div></div>
-                  <div className="card-body">
-                    <form onSubmit={uploadRelease}>
-                      <div className="field"><label className="field-label">Plugin key</label><input className="input" value={releaseKey} onChange={e => setReleaseKey(e.target.value)} placeholder="vendor.name.plugin" /></div>
-                      <div className="field"><label className="field-label">Channel</label>
-                        <select className="select" value={releaseForm.channel} onChange={e => setReleaseForm(p=>({...p,channel:e.target.value}))}>
-                          <option value="stable">stable</option><option value="beta">beta</option><option value="canary">canary</option>
-                        </select>
-                      </div>
-                      <div className="field"><label className="field-label">Changelog</label><textarea className="textarea" rows={3} value={releaseForm.log} onChange={e => setReleaseForm(p=>({...p,log:e.target.value}))} placeholder="What changed…" /></div>
-                      <div className="field">
-                        <label className="field-label">Package file (.lspkg)</label>
-                        <input className="input" type="file" accept=".lspkg,.zip" style={{padding:'7px 10px',fontSize:12}} onChange={e => setReleaseForm(p=>({...p,file:e.target.files?.[0]??null}))} />
-                      </div>
-                      <button className="btn btn-primary btn-full" type="submit" disabled={isBusy('upload')||!releaseForm.file}>{isBusy('upload') ? <><Spin/> Uploading…</> : '↑ Upload release'}</button>
-                    </form>
-                    {myPlugins.length > 0 && (
-                      <div style={{marginTop:14}}>
-                        <div style={{fontSize:11,color:'var(--txt-3)',marginBottom:8}}>Quick-load from your plugins:</div>
-                        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                          {myPlugins.map(p => <button key={p.id} className="chip" onClick={() => { setReleaseKey(p.plugin_key); loadReleases(p.plugin_key); }}>{p.plugin_key}</button>)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="card">
-                  <div className="card-head">
-                    <div><div className="card-title">Release history</div><div className="card-sub">{releaseKey||'Select a plugin'}</div></div>
-                    <button className="btn btn-secondary btn-sm" disabled={isBusy('releases')} onClick={() => loadReleases()}>{isBusy('releases') ? <Spin/> : '⟳'}</button>
-                  </div>
-                  <div style={{padding:'0 0'}}>
-                    {releases.length === 0
-                      ? <div className="empty"><div className="empty-icon">↑</div><div className="empty-title">No releases loaded</div><div className="empty-sub">Enter a plugin key and refresh.</div></div>
-                      : <div style={{padding:12,display:'flex',flexDirection:'column',gap:8}}>
-                          {releases.map(r => (
-                            <div className="li" key={r.id}>
-                              <div className="li-left"><div className="li-name">v{r.version}</div><div className="li-sub">{fmtDT(r.created_at)}</div></div>
-                              <div className="li-actions"><Lbl v={r.release_channel}/><Lbl v={r.status}/>{r.review_state&&<Lbl v={r.review_state}/>}</div>
-                            </div>
-                          ))}
-                        </div>
-                    }
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* ══════════════════════════════════════════════════════
                 USER — MY REVIEWS
@@ -835,7 +993,7 @@ export default function App() {
                         <thead><tr><th>Plugin</th><th>Version</th><th>Channel</th><th>Status</th><th>Review</th><th>Published</th></tr></thead>
                         <tbody>
                           {myReleases.map(r => (
-                            <tr key={r.id}>
+                            <tr key={r.release_id}>
                               <td><span className="tbl-mono">{r.plugin_key}</span></td>
                               <td><span className="tbl-mono">v{r.version}</span></td>
                               <td><Lbl v={r.release_channel}/></td>
@@ -917,40 +1075,6 @@ export default function App() {
 
       {/* ════ MODALS ════ */}
 
-      {/* Create plugin modal */}
-      {showPluginModal && (
-        <div className="overlay" onClick={e => e.target===e.currentTarget && setShowPluginModal(false)}>
-          <div className="modal" style={{maxWidth:560}}>
-            <div className="modal-head"><div className="modal-title">Create new plugin</div></div>
-            <div className="modal-body">
-              <form id="pf" onSubmit={savePlugin}>
-                <div className="grid2-form" style={{marginBottom:12}}>
-                  <div className="field" style={{margin:0}}><label className="field-label">Plugin key *</label><input className="input" required value={pluginForm.key} onChange={e => setPluginForm(p=>({...p,key:e.target.value}))} placeholder="vendor.category.name" /></div>
-                  <div className="field" style={{margin:0}}><label className="field-label">Display name *</label><input className="input" required value={pluginForm.name} onChange={e => setPluginForm(p=>({...p,name:e.target.value}))} /></div>
-                </div>
-                <div className="field"><label className="field-label">Description</label><textarea className="textarea" rows={2} value={pluginForm.desc} onChange={e => setPluginForm(p=>({...p,desc:e.target.value}))} /></div>
-                <div className="grid2-form" style={{marginBottom:12}}>
-                  <div className="field" style={{margin:0}}><label className="field-label">Trust level</label>
-                    <select className="select" value={pluginForm.trust} onChange={e => setPluginForm(p=>({...p,trust:e.target.value}))}>
-                      <option value="community">community</option><option value="verified">verified</option><option value="trusted">trusted</option>
-                    </select>
-                  </div>
-                  <div className="field" style={{margin:0}}><label className="field-label">Visibility</label>
-                    <select className="select" value={pluginForm.vis} onChange={e => setPluginForm(p=>({...p,vis:e.target.value}))}>
-                      <option value="public">public</option><option value="private">private</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="field"><label className="field-label">Tags (comma-separated)</label><input className="input" value={pluginForm.tags} onChange={e => setPluginForm(p=>({...p,tags:e.target.value}))} placeholder="ai, text, image" /></div>
-              </form>
-            </div>
-            <div className="modal-foot">
-              <button className="btn btn-secondary" onClick={() => setShowPluginModal(false)}>Cancel</button>
-              <button className="btn btn-primary" form="pf" type="submit" disabled={isBusy('save-plugin')}>{isBusy('save-plugin') ? <><Spin/> Saving…</> : 'Create plugin'}</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* API Keys modal */}
       {showConfigModal && (
@@ -993,6 +1117,52 @@ export default function App() {
   );
 }
 
+function FileDropZone({
+  label,
+  hint,
+  accept,
+  dragActive,
+  multiple = false,
+  onDragChange,
+  onFiles,
+}: {
+  label: string;
+  hint: string;
+  accept: string;
+  dragActive: boolean;
+  multiple?: boolean;
+  onDragChange: (active: boolean) => void;
+  onFiles: (files: File[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <div
+      className={`dropzone${dragActive ? ' active' : ''}`}
+      onDragEnter={(e) => { e.preventDefault(); onDragChange(true); }}
+      onDragOver={(e) => { e.preventDefault(); onDragChange(true); }}
+      onDragLeave={(e) => { e.preventDefault(); if (e.currentTarget === e.target) onDragChange(false); }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDragChange(false);
+        onFiles(Array.from(e.dataTransfer.files || []));
+      }}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        className="sr-only-input"
+        accept={accept}
+        multiple={multiple}
+        onChange={(e) => onFiles(Array.from(e.target.files || []))}
+      />
+      <div className="dropzone-label">{label}</div>
+      <div className="dropzone-hint">{hint}</div>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => inputRef.current?.click()}>Browse</button>
+    </div>
+  );
+}
+
 // ─── Plugin grid component ────────────────────────────────────────
 function PluginGrid({ plugins, onReleasesClick, adminActions }: {
   plugins: PublisherPlugin[];
@@ -1003,7 +1173,7 @@ function PluginGrid({ plugins, onReleasesClick, adminActions }: {
     <div className="g-auto">
       {plugins.map(p => {
         const color = pluginColor(p.plugin_key);
-        const pl = publisherLabel(undefined, p.publisher_slug);
+        const pl = publisherLabel(p.plugin_type || p.trust_level, p.publisher_slug);
         const { cls: vCls, text: vTxt } = statusLbl(p.visibility);
         return (
           <div className="plugin-card" key={p.id}>

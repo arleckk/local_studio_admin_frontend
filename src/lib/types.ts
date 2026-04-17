@@ -5,8 +5,34 @@ export type PublisherAccess = { publisher_id: string; publisher_slug: string; di
 export type PublisherProfile = { id: string; slug: string; display_name: string; description?: string|null; trust_tier?: string|null; verification_status?: string|null; verified?: boolean; active?: boolean };
 export type PublisherMember = { id: string; publisher_id: string; publisher_slug: string; user_id: string; username?: string|null; email?: string|null; role: string; status: string; notes?: string|null; permissions: Record<string,unknown>; created_at: string; updated_at: string };
 export type PublisherInvitation = { id: string; email: string; invited_username?: string|null; role: string; status: string; expires_at: string; invite_token?: string|null; notes?: string|null };
-export type PublisherPlugin = { id: string; plugin_key: string; display_name: string; description?: string|null; publisher_slug: string; publisher?: string|null; trust_level: string; visibility: string; tags: string[]; categories: string[]; capabilities: string[]; internal?: boolean; bundled?: boolean; homepage_url?: string|null; created_at: string; updated_at: string };
-export type PublisherRelease = { id: string; plugin_key: string; version: string; status: string; review_state?: string|null; release_channel?: string|null; changelog?: string|null; created_at?: string|null; approved_at?: string|null };
+export type PublisherPluginMedia = {
+  icon?: Record<string, unknown> | null;
+  images?: Array<Record<string, unknown>>;
+};
+export type PublisherPlugin = {
+  id: string;
+  plugin_key: string;
+  display_name: string;
+  description?: string|null;
+  publisher_slug: string;
+  publisher?: string|null;
+  trust_level: string;
+  plugin_type?: string;
+  visibility: string;
+  tags: string[];
+  categories: string[];
+  capabilities: string[];
+  internal?: boolean;
+  bundled?: boolean;
+  homepage_url?: string|null;
+  documentation_url?: string|null;
+  media?: PublisherPluginMedia;
+  video_links?: string[];
+  created_at: string;
+  updated_at: string;
+};
+export type PublisherRelease = { release_id: string; plugin_key: string; version: string; status: string; review_state?: string|null; release_channel?: string|null; changelog?: string|null; created_at?: string|null; approved_at?: string|null };
+export type PublisherPublishResponse = { plugin: PublisherPlugin; release: PublisherRelease };
 export type ReviewQueueItem = { release_id: string; plugin_key: string; plugin_display_name: string; publisher?: string|null; publisher_trust_tier?: string|null; version: string; release_channel?: string|null; status: string; review_state: string; risk_level?: string|null; recommended_decision?: string|null; reasons: string[]; created_at: string; queue_age_hours: number };
 export type ReviewQueueSummary = { total: number; by_status: Record<string,number>; by_review_state: Record<string,number>; by_risk_level: Record<string,number>; by_release_channel: Record<string,number> };
 export type AdminSummary = { users_total?: number; publishers_total?: number; publishers_verified?: number; plugins_total?: number; releases_total?: number; releases_in_review?: number; releases_quarantined?: number; releases_approved?: number; active_sessions?: number; pending_publisher_invitations?: number; abuse_reports_open?: number; [key: string]: unknown };
