@@ -1,75 +1,38 @@
-export type RequestOptions = {
-  method?: string;
-  body?: unknown;
-  headers?: Record<string, string>;
-  token?: string;
-  publisherSlug?: string;
-  publisherApiKey?: string;
-  adminApiKey?: string;
-  includePublisher?: boolean;
-  includeAdmin?: boolean;
-  isFormData?: boolean;
-};
+import { API_BASE } from './storage';
+
+export type ReqOpts = { method?: string; body?: unknown; token?: string; publisherSlug?: string; publisherApiKey?: string; adminApiKey?: string; pub?: boolean; admin?: boolean; isForm?: boolean };
 
 export class ApiError extends Error {
-  status: number;
-  payload: unknown;
-
-  constructor(message: string, status: number, payload: unknown) {
-    super(message);
-    this.status = status;
-    this.payload = payload;
-  }
+  constructor(msg: string, public status: number, public payload: unknown) { super(msg); }
 }
 
-function resolveBaseUrl(apiBaseUrl: string): string {
-  return apiBaseUrl.trim().replace(/\/$/, '');
+export function url(path: string) {
+  const base = API_BASE.replace(/\/$/, '');
+  return `${base}${path.startsWith('/') ? path : '/' + path}`;
 }
 
-export function buildUrl(apiBaseUrl: string, path: string): string {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  const base = resolveBaseUrl(apiBaseUrl);
-  return base ? `${base}${normalizedPath}` : normalizedPath;
-}
-
-export async function apiRequest<T>(apiBaseUrl: string, path: string, options: RequestOptions = {}): Promise<T> {
-  const headers = new Headers(options.headers ?? {});
-
-  if (options.token) {
-    headers.set('Authorization', `Bearer ${options.token}`);
+export async function req<T>(path: string, opts: ReqOpts = {}): Promise<T> {
+  const h = new Headers();
+  if (opts.token) h.set('Authorization', `Bearer ${opts.token}`);
+  if (opts.pub) {
+    if (opts.publisherSlug) h.set('X-Publisher-Slug', opts.publisherSlug);
+    if (opts.publisherApiKey) h.set('X-Marketplace-Publisher-Key', opts.publisherApiKey);
   }
-  if (options.includePublisher) {
-    if (options.publisherSlug) headers.set('X-Publisher-Slug', options.publisherSlug);
-    if (options.publisherApiKey) headers.set('X-Marketplace-Publisher-Key', options.publisherApiKey);
-  }
-  if (options.includeAdmin && options.adminApiKey) {
-    headers.set('X-Marketplace-Admin-Key', options.adminApiKey);
-  }
+  if (opts.admin && opts.adminApiKey) h.set('X-Marketplace-Admin-Key', opts.adminApiKey);
 
   let body: BodyInit | undefined;
-  if (options.body !== undefined && options.body !== null) {
-    if (options.isFormData && options.body instanceof FormData) {
-      body = options.body;
-    } else {
-      headers.set('Content-Type', 'application/json');
-      body = JSON.stringify(options.body);
-    }
+  if (opts.body != null) {
+    if (opts.isForm && opts.body instanceof FormData) { body = opts.body; }
+    else { h.set('Content-Type', 'application/json'); body = JSON.stringify(opts.body); }
   }
 
-  const response = await fetch(buildUrl(apiBaseUrl, path), {
-    method: options.method ?? 'GET',
-    headers,
-    body,
-  });
-
-  const contentType = response.headers.get('content-type') || '';
-  const payload = contentType.includes('application/json') ? await response.json() : await response.text();
-
-  if (!response.ok) {
-    const detail = typeof payload === 'string' ? payload : (payload as { detail?: unknown })?.detail;
-    const message = typeof detail === 'string' ? detail : JSON.stringify(detail ?? payload, null, 2);
-    throw new ApiError(message, response.status, payload);
+  const res = await fetch(url(path), { method: opts.method ?? 'GET', headers: h, body });
+  const ct = res.headers.get('content-type') || '';
+  const data = ct.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    const detail = typeof data === 'string' ? data : (data as { detail?: unknown })?.detail;
+    const msg = typeof detail === 'string' ? detail : JSON.stringify(detail ?? data, null, 2);
+    throw new ApiError(msg, res.status, data);
   }
-
-  return payload as T;
+  return data as T;
 }
