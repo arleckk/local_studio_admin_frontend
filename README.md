@@ -1,81 +1,63 @@
-# Local Studio Admin Frontend
+# Local Studio — Plugin Admin Frontend
 
-Frontend separado en React + Vite para `local_studio_backend`.
-
-Está pensado como consola inicial para:
-
-- login / register / logout
-- ver sesión actual
-- bootstrap de acceso al publisher
-- ver access/memberships del publisher
-- crear/editar metadata de plugins
-- subir releases
-- listar members e invitations
-- ver review queue y ejecutar approve / reject / request changes
+Admin panel React + TypeScript for managing plugins, publishers, users and release reviews.
 
 ## Stack
 
-- React 18
-- TypeScript
-- Vite
-- CSS simple sin dependencias UI externas
+- React 18 + TypeScript
+- Vite 5
+- Zero UI library dependencies — custom design system
 
-## Requisitos
-
-- Node.js 20+
-- `local_studio_backend` corriendo
-
-## Variables de entorno
-
-Copia `.env.example` a `.env` y ajusta lo que necesites.
-
-### Opción A — llamar directo al backend
+## Setup
 
 ```bash
-VITE_API_BASE_URL=http://localhost:45121
-```
-
-Esto hace que el navegador llame directo a FastAPI.
-
-### Opción B — usar proxy de Vite en desarrollo
-
-```bash
-VITE_DEV_PROXY_TARGET=http://localhost:45121
-```
-
-En esta opción puedes dejar `VITE_API_BASE_URL` vacío para trabajar sobre rutas relativas `/api/...`.
-
-## Desarrollo
-
-```bash
+cp .env.example .env
+# Edit VITE_API_BASE_URL to point at your backend
 npm install
-npm run dev
+npm run dev        # http://localhost:45110
+npm run build      # dist/
 ```
 
-## Build
+## Environment Variables
 
-```bash
-npm run build
-npm run preview
-```
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_BASE_URL` | Backend URL, e.g. `http://localhost:45111` |
+| `VITE_DEFAULT_PUBLISHER_SLUG` | Pre-filled publisher slug |
+| `VITE_DEFAULT_ADMIN_API_KEY` | Pre-filled admin key (dev only) |
+| `VITE_DEFAULT_PUBLISHER_API_KEY` | Pre-filled publisher key (dev only) |
 
-## Valores por defecto útiles para local
+> Never commit `.env` with real keys. Use `.env.example` as the template.
 
-Si no cambias nada, la UI ya puede precargar estos valores cuando existan en `.env`:
+## Features
 
-- `VITE_DEFAULT_PUBLISHER_SLUG=local-studio`
-- `VITE_DEFAULT_PUBLISHER_API_KEY=local-studio-backend-publisher`
-- `VITE_DEFAULT_ADMIN_API_KEY=local-studio-backend-admin`
+| Section | Description |
+|---------|-------------|
+| **Dashboard** | Platform metrics, release pipeline chart, runtime status |
+| **Plugins** | Browse, filter and create plugins with label system (Core / Official / Community) |
+| **Releases** | Upload `.lspkg` packages, track status and review state |
+| **Publishers** | Admin view of all publishers, toggle Official label |
+| **Users** | Admin user management — activate, suspend, ban |
+| **Review Queue** | Moderate releases — approve, reject, request changes |
+| **Settings** | Connection config, publisher access, session info |
 
-## Flujo recomendado
+## Label System
 
-1. Login o register.
-2. En **Publisher**, usar la API key una sola vez en **Grant my account access**.
-3. Cargar memberships y profile.
-4. En **Plugins**, crear el plugin.
-5. En **Releases**, subir el paquete.
-6. En **Admin reviews**, revisar la cola y aprobar/rechazar.
+| Label | Condition |
+|-------|-----------|
+| ⬡ Core | Plugin has `internal: true` or `bundled: true` |
+| ★ Official | Publisher has `trust_tier: "official"` or `verified: true` |
+| Community | All other publishers (default) |
 
-## Nota importante sobre CORS
+## Export
 
-El backend actual ya viene con CORS abierto por defecto en desarrollo, así que esta app puede correr en otro puerto sin problema.
+Each section has a **⬇ Export** button that downloads data as CSV or JSON.
+
+## Auth Flow
+
+1. Sign in or register → session is stored in `localStorage`
+2. Session token is used for publisher operations (`Authorization: Bearer <token>`)
+3. Admin API key is sent as `X-Marketplace-Admin-Key` header for admin operations
+4. Publisher API key + slug are sent as `X-Marketplace-Publisher-Key` + `X-Publisher-Slug`
+
+Session config persists across browser reloads via `localStorage` under key `local_studio_admin_frontend_v1`.

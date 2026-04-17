@@ -76,12 +76,17 @@ export type PublisherPlugin = {
   id: string;
   plugin_key: string;
   display_name: string;
+  description?: string | null;
   publisher_slug: string;
+  publisher?: string | null;
   trust_level: string;
   visibility: string;
   tags: string[];
   categories: string[];
   capabilities: string[];
+  internal?: boolean;
+  bundled?: boolean;
+  homepage_url?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -126,10 +131,26 @@ export type ReviewQueueSummary = {
 export type AdminSummary = {
   users_total?: number;
   publishers_total?: number;
+  publishers_verified?: number;
   plugins_total?: number;
   releases_total?: number;
-  pending_reviews_total?: number;
+  releases_in_review?: number;
+  releases_quarantined?: number;
+  releases_approved?: number;
+  active_sessions?: number;
+  pending_publisher_invitations?: number;
+  abuse_reports_open?: number;
   [key: string]: unknown;
+};
+
+export type AdminUser = {
+  id: string;
+  username: string;
+  email: string;
+  status: string;
+  trust_flags: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type RuntimeStatus = {
