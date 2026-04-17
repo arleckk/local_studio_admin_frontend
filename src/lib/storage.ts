@@ -11,7 +11,6 @@ export type PersistedState = {
 };
 
 const KEY = 'ls_admin_v2';
-// Backend URL is LOCKED — not user-configurable
 export const API_BASE = 'http://127.0.0.1:45121';
 
 export function loadState(): PersistedState {
