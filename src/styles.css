@@ -353,6 +353,7 @@ input, select, textarea { font-family: inherit; }
   display: flex; flex-direction: column; gap: 10px;
 }
 .plugin-card:hover { border-color: var(--border-3); transform: translateY(-2px); box-shadow: var(--shadow-card), var(--accent-glow); }
+.plugin-card.selected { border-color: rgba(6,182,212,0.45); box-shadow: var(--shadow-card), 0 0 0 1px rgba(6,182,212,0.16); }
 .plugin-icon {
   width: 40px; height: 40px; border-radius: var(--r);
   display: flex; align-items: center; justify-content: center;
@@ -421,6 +422,19 @@ input, select, textarea { font-family: inherit; }
 .input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(6,182,212,0.1); }
 .select option { background: var(--bg-card); }
 .textarea { resize: vertical; min-height: 72px; line-height: 1.6; }
+.multi-select { position: relative; }
+.multi-select-trigger { width: 100%; min-height: 42px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; background: var(--bg-input); border: 1px solid var(--border-2); border-radius: var(--r); color: var(--txt-1); }
+.multi-select-trigger:hover { border-color: var(--border-3); }
+.multi-select.open .multi-select-trigger { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(6,182,212,0.1); }
+.multi-select-caret { color: var(--txt-3); flex-shrink: 0; }
+.multi-select-menu { position: absolute; top: calc(100% + 8px); left: 0; right: 0; z-index: 20; background: var(--bg-card); border: 1px solid var(--border-2); border-radius: var(--r); box-shadow: var(--shadow-lg); max-height: 260px; overflow: auto; padding: 8px; }
+.multi-select-option { display: flex; align-items: flex-start; gap: 10px; padding: 9px 8px; border-radius: var(--r); color: var(--txt-1); cursor: pointer; }
+.multi-select-option:hover { background: var(--bg-hover); }
+.multi-select-option input { margin-top: 2px; accent-color: var(--accent); }
+.multi-select-option-title { display: block; font-size: 12px; font-weight: 600; }
+.multi-select-option-sub { display: block; font-size: 11px; color: var(--txt-3); margin-top: 2px; }
+.multi-select-empty { padding: 10px 8px; font-size: 12px; color: var(--txt-3); }
+.plugin-detail-copy { background: var(--bg-surface); border: 1px solid var(--border-1); border-radius: var(--r); padding: 11px 12px; font-size: 12px; color: var(--txt-2); line-height: 1.6; }
 .grid2-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 /* ─── Table ──────────────────────────────────────────────────── */
@@ -562,6 +576,11 @@ input, select, textarea { font-family: inherit; }
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(6,182,212,0.08);
   transform: translateY(-1px);
+}
+.dropzone.loaded {
+  border-color: rgba(5,150,105,0.55);
+  box-shadow: 0 0 0 3px rgba(5,150,105,0.10);
+  background: linear-gradient(180deg, rgba(5,150,105,0.08), transparent 65%), var(--bg-input);
 }
 .dropzone-label { font-size: 12px; font-weight: 700; color: var(--txt-1); }
 .dropzone-hint { font-size: 11px; color: var(--txt-3); line-height: 1.5; white-space: pre-wrap; }
