@@ -22,7 +22,7 @@ export async function req<T>(path: string, opts: ReqOpts = {}): Promise<T> {
 
   let body: BodyInit | undefined;
   if (opts.body != null) {
-    if (opts.isForm && opts.body instanceof FormData) { body = opts.body; }
+    if (opts.isForm && opts.body instanceof FormData) body = opts.body;
     else { h.set('Content-Type', 'application/json'); body = JSON.stringify(opts.body); }
   }
 

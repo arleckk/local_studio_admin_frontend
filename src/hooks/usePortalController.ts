@@ -1,0 +1,754 @@
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError, req } from '../lib/api';
+import { API_BASE, loadState, saveState } from '../lib/storage';
+import type {
+  AdminSummary,
+  AdminUser,
+  CapabilityOption,
+  DeveloperKey,
+  DeveloperStatus,
+  PackageValidationResult,
+  PublisherPlugin,
+  PublisherPublishResponse,
+  PublisherRelease,
+  ReviewQueueItem,
+  ReviewQueueSummary,
+  RuntimeStatus,
+  SessionResponse,
+  SessionUser,
+} from '../lib/types';
+import {
+  loadDeveloperKeys,
+  loadDeveloperStatusWithFallback,
+  normalizePlugins,
+  normalizeReleases,
+  normalizeReviewQueue,
+  validatePackageContract,
+} from '../lib/contracts';
+import {
+  AdminPage,
+  Theme,
+  Toast,
+  UserPage,
+  buildFallbackPackageValidation,
+  enrichPlugin,
+  exportCsv,
+  isAllowedYoutubeUrl,
+  isLspkgFile,
+  normalizeCapabilityOptions,
+  splitCsvLike,
+  toReleaseChannelOptions,
+} from '../lib/utils';
+
+const ps = loadState();
+
+type ConfirmCtx = { title: string; body: string; onOk: () => void } | null;
+
+type PublishForm = {
+  name: string;
+  description: string;
+  tags: string;
+  categories: string;
+  capabilities: string[];
+  changelog: string;
+  videoLinks: string;
+  releaseChannel: string;
+  packageFile: File | null;
+  iconFile: File | null;
+  imageFiles: File[];
+};
+
+const emptyDeveloperStatus: DeveloperStatus = {
+  source: 'fallback',
+  status: 'unknown',
+  developer_status: 'unknown',
+  capabilities: [],
+  publish_allowed: null,
+  developer_mode_allowed: null,
+  local_install_allowed: null,
+  signing_keys_registered: 0,
+  active_key_id: null,
+  warnings: [],
+  notes: [],
+};
+
+export function usePortalController() {
+  const [theme, setTheme] = useState<Theme>(ps.theme ?? 'dark');
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
+
+  const [accessToken, setAccessToken] = useState(ps.accessToken);
+  const [refreshToken, setRefreshToken] = useState(ps.refreshToken);
+  const [sessionId, setSessionId] = useState(ps.sessionId);
+  const [expiresAt, setExpiresAt] = useState(ps.expiresAt);
+  const [user, setUser] = useState<SessionUser | null>(ps.user);
+  const [adminKey] = useState(ps.adminApiKey);
+
+  const [aPage, setAPage] = useState<AdminPage>('dash');
+  const [uPage, setUPage] = useState<UserPage>('publish');
+
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
+  const [allPlugins, setAllPlugins] = useState<PublisherPlugin[]>([]);
+  const [myPlugins, setMyPlugins] = useState<PublisherPlugin[]>([]);
+  const [releases, setReleases] = useState<PublisherRelease[]>([]);
+  const [capabilityOptions, setCapabilityOptions] = useState<CapabilityOption[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
+  const [reviewSummary, setReviewSummary] = useState<ReviewQueueSummary | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [developerStatus, setDeveloperStatus] = useState<DeveloperStatus>(emptyDeveloperStatus);
+  const [developerKeys, setDeveloperKeys] = useState<DeveloperKey[]>([]);
+  const [packageValidation, setPackageValidation] = useState<PackageValidationResult | null>(null);
+
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [pluginFilter, setPluginFilter] = useState('all');
+  const [pluginSearch, setPluginSearch] = useState('');
+  const [userSearch, setUserSearch] = useState('');
+  const [userFilter, setUserFilter] = useState('all');
+  const [releaseKey, setReleaseKey] = useState('');
+  const [confirmCtx, setConfirmCtx] = useState<ConfirmCtx>(null);
+
+  const [publishForm, setPublishForm] = useState<PublishForm>({
+    name: '',
+    description: '',
+    tags: '',
+    categories: '',
+    capabilities: [],
+    changelog: '',
+    videoLinks: '',
+    releaseChannel: 'private_beta',
+    packageFile: null,
+    iconFile: null,
+    imageFiles: [],
+  });
+  const [publishDrag, setPublishDrag] = useState({ package: false, icon: false, images: false });
+  const [pwForm, setPwForm] = useState({ current: '', next: '', confirm: '' });
+  const [loginForm, setLoginForm] = useState({ ident: '', pw: '' });
+  const [regForm, setRegForm] = useState({ user: '', email: '', pw: '', pw2: '' });
+  const [developerKeyForm, setDeveloperKeyForm] = useState({ label: '', algorithm: 'ed25519', publicKey: '' });
+  const [authTab, setAuthTab] = useState<'login' | 'reg'>('login');
+  const [selectedMyPluginKey, setSelectedMyPluginKey] = useState<string | null>(null);
+
+  const isAdmin = !!user?.is_admin;
+  const isLoggedIn = !!user;
+
+  useEffect(() => {
+    saveState({
+      publisherSlug: user?.publisher_slug || ps.publisherSlug || 'local-studio',
+      publisherApiKey: '',
+      adminApiKey: adminKey,
+      accessToken,
+      refreshToken,
+      sessionId,
+      expiresAt,
+      theme,
+      user,
+    });
+  }, [accessToken, refreshToken, sessionId, expiresAt, theme, user, adminKey]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toast = useCallback((kind: Toast['kind'], msg: string) => {
+    const id = ++toastId.current;
+    setToasts((current) => [...current, { id, kind, msg }]);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4200);
+  }, []);
+
+  const isBusy = useCallback((key: string) => !!busy[key], [busy]);
+
+  async function run<T>(key: string, fn: () => Promise<T>): Promise<T | null> {
+    setBusy((current) => ({ ...current, [key]: true }));
+    try {
+      return await fn();
+    } catch (error) {
+      toast('err', error instanceof ApiError ? error.message : String(error));
+      return null;
+    } finally {
+      setBusy((current) => ({ ...current, [key]: false }));
+    }
+  }
+
+  const auth = useCallback(
+    (opts: { pub?: boolean; admin?: boolean } = {}) => ({
+      token: accessToken,
+      adminApiKey: adminKey,
+      publisherSlug: user?.publisher_slug || ps.publisherSlug,
+      pub: opts.pub,
+      admin: opts.admin,
+    }),
+    [accessToken, adminKey, user?.publisher_slug],
+  );
+
+  const applySession = useCallback((data: SessionResponse) => {
+    setAccessToken(data.access_token);
+    setRefreshToken(data.refresh_token);
+    setSessionId(data.session_id);
+    setExpiresAt(data.expires_at);
+    setUser(data.user);
+  }, []);
+
+  const refreshCapabilities = useCallback(async () => {
+    const payload = await run('capabilities', async () => {
+      const candidates = [
+        '/api/v1/market/capabilities',
+        '/api/v1/capabilities',
+        '/api/v1/publishers/capabilities',
+        '/api/v1/metadata/capabilities',
+      ];
+      for (const path of candidates) {
+        try {
+          return await req<unknown>(path, auth());
+        } catch {
+          // continue
+        }
+      }
+      return [];
+    });
+    if (payload) setCapabilityOptions(normalizeCapabilityOptions(payload));
+  }, [auth]);
+
+  const loadDashboard = useCallback(async () => {
+    if (!isAdmin || !accessToken) return;
+    const payload = await run('dashboard', async () => {
+      const [summaryPayload, runtimePayload] = await Promise.all([
+        req<AdminSummary>('/api/v1/admin/summary', auth({ admin: true })),
+        req<RuntimeStatus>('/api/v1/admin/runtime', auth({ admin: true })),
+      ]);
+      return { summaryPayload, runtimePayload };
+    });
+    if (!payload) return;
+    setSummary(payload.summaryPayload);
+    setRuntime(payload.runtimePayload);
+  }, [accessToken, auth, isAdmin]);
+
+  const loadAllPlugins = useCallback(async () => {
+    if (!accessToken) return;
+    const payload = await run('all-plugins', async () => req<unknown>('/api/v1/publishers/plugins', auth()));
+    if (!payload) return;
+    setAllPlugins(normalizePlugins(payload));
+  }, [accessToken, auth]);
+
+  const loadMyPlugins = useCallback(async () => {
+    if (!accessToken) return;
+    const pluginPayload = await run('my-plugins', async () => req<unknown>('/api/v1/publishers/plugins', auth()));
+    if (!pluginPayload) return;
+    const plugins = normalizePlugins(pluginPayload);
+    const releaseResults = await Promise.allSettled(
+      plugins.map((plugin) => req<unknown>(`/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/releases`, auth())),
+    );
+    const releaseMap = new Map<string, PublisherRelease[]>();
+    releaseResults.forEach((result, index) => {
+      if (result.status !== 'fulfilled') return;
+      releaseMap.set(plugins[index].plugin_key, normalizeReleases(result.value));
+    });
+    const enriched = plugins.map((plugin) => enrichPlugin(plugin, releaseMap.get(plugin.plugin_key) || []));
+    setMyPlugins(enriched);
+    const firstKey = selectedMyPluginKey && enriched.some((plugin) => plugin.plugin_key === selectedMyPluginKey)
+      ? selectedMyPluginKey
+      : enriched[0]?.plugin_key || null;
+    setSelectedMyPluginKey(firstKey);
+    if (firstKey) setReleases(releaseMap.get(firstKey) || []);
+    else setReleases([]);
+  }, [accessToken, auth, selectedMyPluginKey]);
+
+  const loadPluginReleases = useCallback(async (pluginKey: string) => {
+    if (!accessToken) return;
+    const payload = await run(`releases-${pluginKey}`, async () => req<unknown>(`/api/v1/publishers/plugins/${encodeURIComponent(pluginKey)}/releases`, auth()));
+    if (!payload) return;
+    setSelectedMyPluginKey(pluginKey);
+    setReleaseKey(pluginKey);
+    setReleases(normalizeReleases(payload));
+  }, [accessToken, auth]);
+
+  const loadUsers = useCallback(async () => {
+    if (!isAdmin || !accessToken) return;
+    const query = new URLSearchParams();
+    if (userSearch.trim()) query.set('q', userSearch.trim());
+    if (userFilter !== 'all') query.set('status', userFilter);
+    const payload = await run('users', async () => req<{ items?: AdminUser[]; total?: number } | AdminUser[]>(`/api/v1/admin/users${query.toString() ? `?${query.toString()}` : ''}`, auth({ admin: true })));
+    if (!payload) return;
+    if (Array.isArray(payload)) {
+      setAdminUsers(payload);
+      setUsersTotal(payload.length);
+      return;
+    }
+    setAdminUsers(Array.isArray(payload.items) ? payload.items : []);
+    setUsersTotal(typeof payload.total === 'number' ? payload.total : Array.isArray(payload.items) ? payload.items.length : 0);
+  }, [accessToken, auth, isAdmin, userFilter, userSearch]);
+
+  const loadReviews = useCallback(async () => {
+    if (!isAdmin || !accessToken) return;
+    const payload = await run('reviews', async () => {
+      const [summaryPayload, queuePayload] = await Promise.all([
+        req<ReviewQueueSummary>('/api/v1/admin/review-queue/summary', auth({ admin: true })),
+        req<unknown>('/api/v1/reviews/queue', auth({ admin: true })),
+      ]);
+      return { summaryPayload, queuePayload };
+    });
+    if (!payload) return;
+    setReviewSummary(payload.summaryPayload);
+    setReviewQueue(normalizeReviewQueue(payload.queuePayload));
+  }, [accessToken, auth, isAdmin]);
+
+  const loadDeveloperHub = useCallback(async () => {
+    if (!accessToken) return;
+    const [keys, status] = await Promise.all([
+      run('developer-keys', async () => loadDeveloperKeys(auth())),
+      run('developer-status', async () => loadDeveloperStatusWithFallback(auth(), user?.capabilities, developerKeys.length)),
+    ]);
+    if (keys) setDeveloperKeys(keys);
+    if (status) setDeveloperStatus(status);
+  }, [accessToken, auth, developerKeys.length, user?.capabilities]);
+
+  const validateSelectedPackage = useCallback(async (file: File | null, releaseChannel: string) => {
+    if (!file) {
+      setPackageValidation(null);
+      return;
+    }
+    const result = await run('package-validate', async () => validatePackageContract(auth(), file, releaseChannel));
+    const nextValidation = result || buildFallbackPackageValidation(file, releaseChannel);
+    setPackageValidation(nextValidation);
+    setPublishForm((current) => ({
+      ...current,
+      name: current.name || nextValidation.manifest?.display_name || current.name,
+      capabilities: current.capabilities.length ? current.capabilities : (nextValidation.capabilities || []),
+    }));
+  }, [auth]);
+
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    refreshCapabilities();
+    loadAllPlugins();
+    loadMyPlugins();
+    loadDeveloperHub();
+    if (isAdmin) {
+      loadDashboard();
+      loadUsers();
+      loadReviews();
+    }
+  }, [isLoggedIn]);
+
+  useEffect(() => {
+    if (!publishForm.packageFile) return;
+    validateSelectedPackage(publishForm.packageFile, publishForm.releaseChannel);
+  }, [publishForm.packageFile, publishForm.releaseChannel, validateSelectedPackage]);
+
+  useEffect(() => {
+    if (selectedMyPluginKey) {
+      const plugin = myPlugins.find((item) => item.plugin_key === selectedMyPluginKey);
+      if (plugin?.latest_release) setReleaseKey(plugin.latest_release.release_id);
+    }
+  }, [myPlugins, selectedMyPluginKey]);
+
+  const handleLogin = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    const data = await run('login', async () => req<SessionResponse>('/api/v1/accounts/login', {
+      method: 'POST',
+      body: { username_or_email: loginForm.ident, password: loginForm.pw },
+    }));
+    if (!data) return;
+    applySession(data);
+    toast('ok', `Welcome back, ${data.user.username}!`);
+  }, [applySession, loginForm.ident, loginForm.pw, toast]);
+
+  const handleRegister = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    if (regForm.pw !== regForm.pw2) { toast('err', 'Passwords do not match.'); return; }
+    const data = await run('register', async () => req<SessionResponse>('/api/v1/accounts/register', {
+      method: 'POST',
+      body: { username: regForm.user, email: regForm.email, password: regForm.pw },
+    }));
+    if (!data) return;
+    applySession(data);
+    toast('ok', `Account created! Welcome, ${data.user.username}.`);
+  }, [applySession, regForm.email, regForm.pw, regForm.pw2, regForm.user, toast]);
+
+  const handleLogout = useCallback(async () => {
+    await run('logout', async () => {
+      try {
+        await req('/api/v1/accounts/logout', { method: 'POST', token: accessToken, body: { refresh_token: refreshToken || null } });
+      } catch {
+        // ignore logout request errors
+      }
+      setUser(null);
+      setAccessToken('');
+      setRefreshToken('');
+      setSessionId('');
+      setExpiresAt('');
+      setSummary(null);
+      setRuntime(null);
+      setAllPlugins([]);
+      setMyPlugins([]);
+      setReleases([]);
+      setReviewQueue([]);
+      setReviewSummary(null);
+      setAdminUsers([]);
+      setUsersTotal(0);
+      setDeveloperStatus(emptyDeveloperStatus);
+      setDeveloperKeys([]);
+      setPackageValidation(null);
+      setSelectedMyPluginKey(null);
+      setReleaseKey('');
+      setAPage('dash');
+      setUPage('publish');
+      toast('ok', 'Signed out.');
+      return true;
+    });
+  }, [accessToken, refreshToken, toast]);
+
+  const handleChangePassword = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    if (pwForm.next !== pwForm.confirm) { toast('err', 'New passwords do not match.'); return; }
+    const ok = await run('change-password', async () => req('/api/v1/accounts/change-password', {
+      method: 'POST',
+      token: accessToken,
+      body: { current_password: pwForm.current, new_password: pwForm.next },
+    }));
+    if (!ok) return;
+    setPwForm({ current: '', next: '', confirm: '' });
+    toast('ok', 'Password updated.');
+  }, [accessToken, pwForm.confirm, pwForm.current, pwForm.next, toast]);
+
+  const handleRegisterDeveloperKey = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    const payload = {
+      label: developerKeyForm.label,
+      algorithm: developerKeyForm.algorithm,
+      public_key: developerKeyForm.publicKey,
+    };
+    const created = await run('developer-create-key', async () => {
+      const candidates = [
+        '/api/v1/developer/keys',
+        '/api/v1/developers/keys',
+        '/api/v1/publishers/developer/keys',
+        '/api/v1/accounts/developer/keys',
+      ];
+      for (const path of candidates) {
+        try {
+          return await req<unknown>(path, { ...auth(), method: 'POST', body: payload });
+        } catch {
+          // continue
+        }
+      }
+      throw new Error('No backend endpoint accepted developer key registration yet.');
+    });
+    if (!created) return;
+    toast('ok', 'Public key registered.');
+    setDeveloperKeyForm({ label: '', algorithm: 'ed25519', publicKey: '' });
+    await loadDeveloperHub();
+  }, [auth, developerKeyForm, loadDeveloperHub, toast]);
+
+  const revokeDeveloperKey = useCallback(async (keyId: string) => {
+    const ok = await run(`developer-revoke-${keyId}`, async () => {
+      const candidates = [
+        `/api/v1/developer/keys/${encodeURIComponent(keyId)}/revoke`,
+        `/api/v1/developers/keys/${encodeURIComponent(keyId)}/revoke`,
+        `/api/v1/publishers/developer/keys/${encodeURIComponent(keyId)}/revoke`,
+        `/api/v1/accounts/developer/keys/${encodeURIComponent(keyId)}/revoke`,
+      ];
+      for (const path of candidates) {
+        try {
+          return await req<unknown>(path, { ...auth(), method: 'POST' });
+        } catch {
+          // continue
+        }
+      }
+      throw new Error('No backend endpoint accepted developer key revocation yet.');
+    });
+    if (!ok) return;
+    toast('ok', `Key ${keyId} revoked.`);
+    await loadDeveloperHub();
+  }, [auth, loadDeveloperHub, toast]);
+
+  const onPackageSelected = useCallback((file: File | null) => {
+    setPublishForm((current) => ({ ...current, packageFile: file }));
+    if (!file) setPackageValidation(null);
+  }, []);
+
+  const onIconSelected = useCallback((file: File | null) => {
+    setPublishForm((current) => ({ ...current, iconFile: file }));
+  }, []);
+
+  const onImagesSelected = useCallback((files: FileList | File[] | null) => {
+    setPublishForm((current) => ({ ...current, imageFiles: files ? Array.from(files) : [] }));
+  }, []);
+
+  const publishPlugin = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    if (!publishForm.packageFile) { toast('err', 'Package is required.'); return; }
+    if (!isLspkgFile(publishForm.packageFile)) { toast('err', 'Only .lspkg packages are allowed.'); return; }
+    const videoLinks = splitCsvLike(publishForm.videoLinks);
+    const invalidVideo = videoLinks.find((link) => !isAllowedYoutubeUrl(link));
+    if (invalidVideo) { toast('err', `Only HTTPS YouTube links are allowed: ${invalidVideo}`); return; }
+    if ((packageValidation?.errors.length || 0) > 0) { toast('err', 'Resolve package validation errors before submit.'); return; }
+
+    const form = new FormData();
+    form.append('name', publishForm.name);
+    form.append('description', publishForm.description);
+    form.append('tags', JSON.stringify(splitCsvLike(publishForm.tags)));
+    form.append('categories', JSON.stringify(splitCsvLike(publishForm.categories)));
+    form.append('capabilities', JSON.stringify(publishForm.capabilities));
+    form.append('changelog', publishForm.changelog);
+    form.append('release_channel', publishForm.releaseChannel);
+    form.append('video_links', JSON.stringify(videoLinks));
+    form.append('package', publishForm.packageFile);
+    if (publishForm.iconFile) form.append('icon', publishForm.iconFile);
+    publishForm.imageFiles.forEach((file) => form.append('images', file));
+
+    const response = await run('publish', async () => {
+      const candidates = ['/api/v1/publishers/publish', '/api/v1/publishers/releases'];
+      for (const path of candidates) {
+        try {
+          return await req<PublisherPublishResponse>(path, { ...auth(), method: 'POST', body: form, isForm: true });
+        } catch {
+          // continue
+        }
+      }
+      throw new Error('Publish endpoints are not available yet.');
+    });
+    if (!response) return;
+    toast('ok', `Submitted ${response.plugin.display_name} to ${publishForm.releaseChannel}.`);
+    setPublishForm({
+      name: '',
+      description: '',
+      tags: '',
+      categories: '',
+      capabilities: [],
+      changelog: '',
+      videoLinks: '',
+      releaseChannel: 'private_beta',
+      packageFile: null,
+      iconFile: null,
+      imageFiles: [],
+    });
+    setPackageValidation(null);
+    await Promise.all([loadAllPlugins(), loadMyPlugins(), isAdmin ? loadReviews() : Promise.resolve()]);
+  }, [auth, isAdmin, loadAllPlugins, loadMyPlugins, loadReviews, packageValidation?.errors.length, publishForm, toast]);
+
+  const setUserStatus = useCallback(async (userId: string, status: 'active' | 'suspended') => {
+    const ok = await run(`user-status-${userId}`, async () => req(`/api/v1/admin/users/${encodeURIComponent(userId)}/status`, {
+      ...auth({ admin: true }),
+      method: 'POST',
+      body: { status },
+    }));
+    if (!ok) return;
+    toast('ok', `User set to ${status}.`);
+    await loadUsers();
+  }, [auth, loadUsers, toast]);
+
+  const setPublisherOfficial = useCallback(async (publisherSlug: string, official: boolean) => {
+    const ok = await run(`publisher-official-${publisherSlug}`, async () => req(`/api/v1/admin/publishers/${encodeURIComponent(publisherSlug)}/set-official?official=${official ? 'true' : 'false'}`, {
+      ...auth({ admin: true }),
+      method: 'POST',
+    }));
+    if (!ok) return;
+    toast('ok', `${publisherSlug} marked as ${official ? 'official' : 'community'}.`);
+    await loadAllPlugins();
+  }, [auth, loadAllPlugins, toast]);
+
+  const reviewAction = useCallback(async (releaseId: string, action: 'approve' | 'reject' | 'request-changes') => {
+    const ok = await run(`review-${releaseId}-${action}`, async () => req(`/api/v1/reviews/${encodeURIComponent(releaseId)}/${action}`, {
+      ...auth({ admin: true }),
+      method: 'POST',
+    }));
+    if (!ok) return;
+    toast('ok', `Review action applied: ${action}.`);
+    await Promise.all([loadReviews(), loadMyPlugins(), loadAllPlugins()]);
+  }, [auth, loadAllPlugins, loadMyPlugins, loadReviews, toast]);
+
+  const disablePlugin = useCallback(async (pluginKey: string) => {
+    const ok = await run(`disable-plugin-${pluginKey}`, async () => req(`/api/v1/publishers/plugins/${encodeURIComponent(pluginKey)}/disable`, {
+      ...auth(),
+      method: 'POST',
+    }));
+    if (!ok) return;
+    toast('ok', `${pluginKey} disabled.`);
+    await Promise.all([loadMyPlugins(), loadAllPlugins()]);
+  }, [auth, loadAllPlugins, loadMyPlugins, toast]);
+
+  const retireRelease = useCallback(async (releaseId: string) => {
+    const ok = await run(`retire-release-${releaseId}`, async () => {
+      const candidates = [
+        `/api/v1/publishers/releases/${encodeURIComponent(releaseId)}/retire`,
+        `/api/v1/publishers/releases/${encodeURIComponent(releaseId)}/disable`,
+      ];
+      for (const path of candidates) {
+        try {
+          return await req(path, { ...auth(), method: 'POST' });
+        } catch {
+          // continue
+        }
+      }
+      throw new Error('No backend endpoint accepted retire/disable release yet.');
+    });
+    if (!ok) return;
+    toast('ok', `Release ${releaseId} retired.`);
+    if (selectedMyPluginKey) await loadPluginReleases(selectedMyPluginKey);
+    await Promise.all([loadMyPlugins(), loadAllPlugins(), isAdmin ? loadReviews() : Promise.resolve()]);
+  }, [auth, isAdmin, loadAllPlugins, loadMyPlugins, loadPluginReleases, loadReviews, selectedMyPluginKey, toast]);
+
+  const allPluginsFiltered = useMemo(() => {
+    const q = pluginSearch.trim().toLowerCase();
+    return allPlugins.filter((plugin) => {
+      if (pluginFilter !== 'all') {
+        const hay = [plugin.status, plugin.plugin_type, plugin.trust_level, plugin.latest_release?.release_channel].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(pluginFilter.toLowerCase())) return false;
+      }
+      if (!q) return true;
+      const hay = [plugin.display_name, plugin.plugin_key, plugin.publisher_slug, plugin.description, ...(plugin.tags || []), ...(plugin.categories || [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [allPlugins, pluginFilter, pluginSearch]);
+
+  const myPluginsFiltered = useMemo(() => {
+    const q = pluginSearch.trim().toLowerCase();
+    return myPlugins.filter((plugin) => {
+      if (pluginFilter !== 'all') {
+        const hay = [plugin.status, plugin.latest_release?.release_channel, plugin.latest_signature_status].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(pluginFilter.toLowerCase())) return false;
+      }
+      if (!q) return true;
+      const hay = [plugin.display_name, plugin.plugin_key, plugin.description, ...(plugin.tags || []), ...(plugin.categories || [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [myPlugins, pluginFilter, pluginSearch]);
+
+  const selectedMyPlugin = useMemo(
+    () => myPlugins.find((plugin) => plugin.plugin_key === selectedMyPluginKey) || null,
+    [myPlugins, selectedMyPluginKey],
+  );
+
+  const filteredUsers = useMemo(() => adminUsers, [adminUsers]);
+
+  const adminNavItems = useMemo(() => [
+    { key: 'dash', icon: '⌂', label: 'Dashboard', section: 'Overview' },
+    { key: 'developer', icon: '⌘', label: 'Developer', section: 'Developer' },
+    { key: 'publish', icon: '⇪', label: 'Publish', section: 'Developer' },
+    { key: 'my-plugins', icon: '◈', label: 'My Plugins', section: 'Plugins' },
+    { key: 'plugins-admin', icon: '⬡', label: 'All Plugins', section: 'Admin' },
+    { key: 'users', icon: '👥', label: 'Users', section: 'Admin' },
+    { key: 'reviews', icon: '✓', label: 'Reviews', section: 'Admin', badge: reviewSummary?.total || reviewQueue.length || 0 },
+  ], [reviewQueue.length, reviewSummary?.total]);
+
+  const userNavItems = useMemo(() => [
+    { key: 'developer', icon: '⌘', label: 'Developer', section: 'Developer' },
+    { key: 'publish', icon: '⇪', label: 'Publish', section: 'Developer' },
+    { key: 'my-plugins', icon: '◈', label: 'My Plugins', section: 'Plugins' },
+    { key: 'profile', icon: '⚙', label: 'Profile', section: 'Account' },
+  ], []);
+
+  const pageTitles: Record<string, string> = {
+    dash: 'Dashboard',
+    developer: 'Developer',
+    publish: 'Publish',
+    'my-plugins': 'My Plugins',
+    'plugins-admin': 'All Plugins',
+    users: 'Users',
+    reviews: 'Reviews',
+    profile: 'Profile',
+  };
+
+  const exportUsersCsv = useCallback(() => {
+    exportCsv('users.csv', ['username', 'email', 'status', 'developer_status', 'capabilities'], filteredUsers.map((item) => [item.username, item.email, item.status, item.developer_status || '', (item.capabilities || []).join('|')]));
+  }, [filteredUsers]);
+
+  const exportPluginsCsv = useCallback(() => {
+    exportCsv('plugins.csv', ['display_name', 'plugin_key', 'publisher_slug', 'status', 'latest_release', 'release_channel', 'signature_status'], allPluginsFiltered.map((item) => [item.display_name, item.plugin_key, item.publisher_slug, item.status || '', item.latest_release?.version || '', item.latest_release?.release_channel || '', item.latest_signature_status || item.latest_release?.signature_status || '']));
+  }, [allPluginsFiltered]);
+
+  return {
+    API_BASE,
+    theme,
+    setTheme,
+    toasts,
+    isBusy,
+    authTab,
+    setAuthTab,
+    loginForm,
+    setLoginForm,
+    regForm,
+    setRegForm,
+    handleLogin,
+    handleRegister,
+    handleLogout,
+    isLoggedIn,
+    isAdmin,
+    user,
+    aPage,
+    setAPage,
+    uPage,
+    setUPage,
+    currentPageTitle: pageTitles[isAdmin ? aPage : uPage],
+    adminNavItems,
+    userNavItems,
+    summary,
+    runtime,
+    loadDashboard,
+    developerStatus,
+    developerKeys,
+    developerKeyForm,
+    setDeveloperKeyForm,
+    loadDeveloperHub,
+    handleRegisterDeveloperKey,
+    revokeDeveloperKey,
+    capabilityOptions,
+    refreshCapabilities,
+    packageValidation,
+    publishForm,
+    setPublishForm,
+    publishDrag,
+    setPublishDrag,
+    onPackageSelected,
+    onIconSelected,
+    onImagesSelected,
+    publishPlugin,
+    allPlugins: allPluginsFiltered,
+    myPlugins: myPluginsFiltered,
+    rawMyPlugins: myPlugins,
+    loadAllPlugins,
+    loadMyPlugins,
+    selectedMyPlugin,
+    selectedMyPluginKey,
+    setSelectedMyPluginKey,
+    releases,
+    releaseKey,
+    setReleaseKey,
+    loadPluginReleases,
+    disablePlugin,
+    retireRelease,
+    pluginFilter,
+    setPluginFilter,
+    pluginSearch,
+    setPluginSearch,
+    reviewQueue,
+    reviewSummary,
+    loadReviews,
+    reviewAction,
+    adminUsers: filteredUsers,
+    usersTotal,
+    loadUsers,
+    userSearch,
+    setUserSearch,
+    userFilter,
+    setUserFilter,
+    setUserStatus,
+    setPublisherOfficial,
+    exportUsersCsv,
+    exportPluginsCsv,
+    confirmCtx,
+    setConfirmCtx,
+    pwForm,
+    setPwForm,
+    handleChangePassword,
+    releaseChannelOptions: toReleaseChannelOptions(),
+  };
+}

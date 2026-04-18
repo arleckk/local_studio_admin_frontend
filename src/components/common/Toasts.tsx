@@ -1,0 +1,2 @@
+import type { Toast } from '../../lib/utils';
+export function Toasts({ toasts }: { toasts: Toast[] }) { if (!toasts.length) return null; const classByKind: Record<string, string> = { ok: 'toast-ok', err: 'toast-err', inf: 'toast-inf' }; return <div className="toasts">{toasts.map((toast) => <div key={toast.id} className={`toast ${classByKind[toast.kind]}`}><span className="toast-dot" />{toast.msg}</div>)}</div>; }

@@ -7,7 +7,7 @@ export type PersistedState = {
   sessionId: string;
   expiresAt: string;
   theme: 'dark' | 'light';
-  user: { id: string; username: string; email: string; status: string; is_admin: boolean } | null;
+  user: { id: string; username: string; email: string; status: string; is_admin: boolean; capabilities?: string[]; publisher_slug?: string | null } | null;
 };
 
 const KEY = 'ls_admin_v2';
