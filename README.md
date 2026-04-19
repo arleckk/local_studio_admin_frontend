@@ -1,18 +1,19 @@
 # Local Studio — Plugin Admin Frontend
 
-Admin panel React + TypeScript for managing plugins, publishers, users and release reviews.
+Admin/developer portal built with React + TypeScript for plugin publishing, developer public keys, release review and account management.
 
 ## Stack
 
 - React 18 + TypeScript
 - Vite 5
-- Zero UI library dependencies — custom design system
+- Native Fetch API
+- Custom CSS UI
 
 ## Setup
 
 ```bash
-cp .env.example .env
-# Edit VITE_API_BASE_URL to point at your backend
+cp .env.example .env.local
+# Edit VITE_API_BASE_URL only when you are not using the Vite dev proxy
 npm install
 npm run dev        # http://localhost:45110
 npm run build      # dist/
@@ -22,42 +23,38 @@ npm run build      # dist/
 
 | Variable | Description |
 |----------|-------------|
-| `VITE_API_BASE_URL` | Backend URL, e.g. `http://localhost:45111` |
-| `VITE_DEFAULT_PUBLISHER_SLUG` | Pre-filled publisher slug |
-| `VITE_DEFAULT_ADMIN_API_KEY` | Pre-filled admin key (dev only) |
-| `VITE_DEFAULT_PUBLISHER_API_KEY` | Pre-filled publisher key (dev only) |
+| `VITE_API_BASE_URL` | Optional backend URL when calling the API directly from the browser. Leave empty to use same-origin or the Vite dev proxy. |
+| `VITE_DEV_PROXY_TARGET` | Dev-only proxy target for `/api` and `/health`. |
+| `VITE_DEFAULT_PUBLISHER_SLUG` | Optional non-sensitive default publisher slug shown in the UI. |
 
-> Never commit `.env` with real keys. Use `.env.example` as the template.
+## Security posture
+
+- This frontend **does not store private keys**.
+- This frontend **must not embed admin or publisher shared secrets**.
+- Authorization must be enforced by `local_studio_backend` using the authenticated user session and backend policy.
+- Session tokens are held in memory during the browser session and are cleared on logout, expiration or reload.
+- Runtime/admin screens are status-focused and must not depend on internal filesystem or storage paths.
 
 ## Features
 
 | Section | Description |
 |---------|-------------|
 | **Dashboard** | Platform metrics, release pipeline chart, runtime status |
-| **Plugins** | Browse, filter and create plugins with label system (Core / Official / Community) |
-| **Releases** | Upload `.lspkg` packages, track status and review state |
-| **Publishers** | Admin view of all publishers, toggle Official label |
-| **Users** | Admin user management — activate, suspend, ban |
-| **Review Queue** | Moderate releases — approve, reject, request changes |
-| **Settings** | Connection config, publisher access, session info |
+| **Developer** | Developer status, public signing keys, signing guide |
+| **Publish** | Package validation, release channel selection, publish pipeline |
+| **My Plugins** | Publisher plugin list, release history, disable/retire actions |
+| **Users** | Admin user management |
+| **Review Queue** | Release moderation workflow |
+| **Profile** | Password change and account info |
 
-## Label System
+## Auth flow
 
-| Label | Condition |
-|-------|-----------|
-| ⬡ Core | Plugin has `internal: true` or `bundled: true` |
-| ★ Official | Publisher has `trust_tier: "official"` or `verified: true` |
-| Community | All other publishers (default) |
+1. Sign in or register.
+2. The backend returns session tokens for the current browser session.
+3. Frontend requests use `Authorization: Bearer <token>` only.
+4. On expiration or `401`, the frontend attempts one coordinated refresh and otherwise returns to login.
+5. Changing password invalidates active sessions and forces sign-in again.
 
 ## Export
 
-Each section has a **⬇ Export** button that downloads data as CSV or JSON.
-
-## Auth Flow
-
-1. Sign in or register → session is stored in `localStorage`
-2. Session token is used for publisher operations (`Authorization: Bearer <token>`)
-3. Admin API key is sent as `X-Marketplace-Admin-Key` header for admin operations
-4. Publisher API key + slug are sent as `X-Marketplace-Publisher-Key` + `X-Publisher-Slug`
-
-Session config persists across browser reloads via `localStorage` under key `local_studio_admin_frontend_v1`.
+CSV exports are sanitized to avoid spreadsheet formula execution when values come from user-controlled data.

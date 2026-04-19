@@ -37,8 +37,46 @@ export function splitCsvLike(value: string) {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
+export const MAX_PACKAGE_SIZE_BYTES = 100 * 1024 * 1024;
+export const MAX_ICON_SIZE_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGE_SIZE_BYTES = 12 * 1024 * 1024;
+export const MAX_IMAGE_COUNT = 8;
+const ALLOWED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
+const ALLOWED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
 export function isLspkgFile(file: File | null | undefined) {
   return !!file && file.name.toLowerCase().endsWith('.lspkg');
+}
+
+export function isSupportedImageFile(file: File | null | undefined) {
+  if (!file) return false;
+  const lowerName = file.name.toLowerCase();
+  const hasAllowedExtension = ALLOWED_IMAGE_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+  return hasAllowedExtension && (!file.type || ALLOWED_IMAGE_MIME_TYPES.includes(file.type));
+}
+
+export function validatePackageFile(file: File | null | undefined): string | null {
+  if (!file) return null;
+  if (!isLspkgFile(file)) return 'Only .lspkg packages are allowed.';
+  if (file.size > MAX_PACKAGE_SIZE_BYTES) return 'Package is too large. Keep .lspkg files under 100 MB.';
+  return null;
+}
+
+export function validateIconFile(file: File | null | undefined): string | null {
+  if (!file) return null;
+  if (!isSupportedImageFile(file)) return 'Icon must be a real PNG, JPG, WEBP or GIF image.';
+  if (file.size > MAX_ICON_SIZE_BYTES) return 'Icon is too large. Keep icon images under 10 MB.';
+  return null;
+}
+
+export function validateImageFiles(files: File[] | FileList | null | undefined): string | null {
+  const list = files ? Array.from(files) : [];
+  if (list.length > MAX_IMAGE_COUNT) return `You can upload up to ${MAX_IMAGE_COUNT} preview images.`;
+  for (const file of list) {
+    if (!isSupportedImageFile(file)) return `Image rejected: ${file.name}. Use PNG, JPG, WEBP or GIF files only.`;
+    if (file.size > MAX_IMAGE_SIZE_BYTES) return `Image too large: ${file.name}. Keep preview images under 12 MB each.`;
+  }
+  return null;
 }
 
 export function isAllowedYoutubeUrl(raw: string) {
@@ -66,7 +104,11 @@ export function statusLbl(value?: string | null) {
 }
 
 export function exportCsv(name: string, cols: string[], rows: (string | number | null | undefined)[][]) {
-  const escape = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const safeCell = (value: unknown) => {
+    const text = String(value ?? '');
+    return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  };
+  const escape = (value: unknown) => `"${safeCell(value).replace(/"/g, '""')}"`;
   const blob = new Blob([[cols, ...rows].map((row) => row.map(escape).join(',')).join('\n')], { type: 'text/csv' });
   const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
   link.click();

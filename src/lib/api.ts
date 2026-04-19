@@ -5,15 +5,17 @@ export type ReqOpts = {
   body?: unknown;
   token?: string;
   publisherSlug?: string;
-  publisherApiKey?: string;
-  adminApiKey?: string;
   pub?: boolean;
   admin?: boolean;
   isForm?: boolean;
   suppressUnauthorizedEvent?: boolean;
 };
 
-export const UNAUTHORIZED_EVENT = 'ls-admin:unauthorized';
+export type UnauthorizedDetail = {
+  path: string;
+  status: 401;
+  payload: unknown;
+};
 
 export class ApiError extends Error {
   constructor(msg: string, public status: number, public payload: unknown) {
@@ -54,31 +56,34 @@ function friendlyErrorMessage(path: string, status: number, data: unknown) {
 
 export function url(path: string) {
   const base = API_BASE.replace(/\/$/, '');
-  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  return base ? `${base}${path.startsWith('/') ? path : `/${path}`}` : (path.startsWith('/') ? path : `/${path}`);
 }
 
+const unauthorizedListeners = new Set<(detail: UnauthorizedDetail) => void>();
+
 function emitUnauthorized(path: string, data: unknown) {
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(
-    new CustomEvent(UNAUTHORIZED_EVENT, {
-      detail: {
-        path,
-        status: 401,
-        payload: data,
-      },
-    }),
-  );
+  const detail: UnauthorizedDetail = { path, status: 401, payload: data };
+  unauthorizedListeners.forEach((listener) => {
+    try {
+      listener(detail);
+    } catch {
+      // ignore listener failures
+    }
+  });
+}
+
+export function subscribeUnauthorized(listener: (detail: UnauthorizedDetail) => void) {
+  unauthorizedListeners.add(listener);
+  return () => {
+    unauthorizedListeners.delete(listener);
+  };
 }
 
 export async function req<T>(path: string, opts: ReqOpts = {}): Promise<T> {
   const headers = new Headers();
 
   if (opts.token) headers.set('Authorization', `Bearer ${opts.token}`);
-  if (opts.pub) {
-    if (opts.publisherSlug) headers.set('X-Publisher-Slug', opts.publisherSlug);
-    if (opts.publisherApiKey) headers.set('X-Marketplace-Publisher-Key', opts.publisherApiKey);
-  }
-  if (opts.admin && opts.adminApiKey) headers.set('X-Marketplace-Admin-Key', opts.adminApiKey);
+  if (opts.publisherSlug) headers.set('X-Publisher-Slug', opts.publisherSlug);
 
   let body: BodyInit | undefined;
   if (opts.body != null) {

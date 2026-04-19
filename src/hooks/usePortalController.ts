@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, req, UNAUTHORIZED_EVENT } from '../lib/api';
-import { API_BASE, loadState, saveState } from '../lib/storage';
+import { ApiError, req, subscribeUnauthorized } from '../lib/api';
+import { API_BASE_DISPLAY, loadState, saveState } from '../lib/storage';
 import type {
   AdminSummary,
   AdminUser,
@@ -34,8 +34,10 @@ import {
   enrichPlugin,
   exportCsv,
   isAllowedYoutubeUrl,
-  isLspkgFile,
   normalizeCapabilityOptions,
+  validateIconFile,
+  validateImageFiles,
+  validatePackageFile,
   splitCsvLike,
   toReleaseChannelOptions,
 } from '../lib/utils';
@@ -79,12 +81,11 @@ export function usePortalController() {
   const unauthorizedHandledAt = useRef(0);
   const refreshPromiseRef = useRef<Promise<SessionResponse | null> | null>(null);
 
-  const [accessToken, setAccessToken] = useState(ps.accessToken);
-  const [refreshToken, setRefreshToken] = useState(ps.refreshToken);
-  const [sessionId, setSessionId] = useState(ps.sessionId);
-  const [expiresAt, setExpiresAt] = useState(ps.expiresAt);
-  const [user, setUser] = useState<SessionUser | null>(ps.user);
-  const [adminKey] = useState(ps.adminApiKey);
+  const [accessToken, setAccessToken] = useState('');
+  const [refreshToken, setRefreshToken] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [user, setUser] = useState<SessionUser | null>(null);
 
   const [aPage, setAPage] = useState<AdminPage>('dash');
   const [uPage, setUPage] = useState<UserPage>('publish');
@@ -138,16 +139,9 @@ export function usePortalController() {
   useEffect(() => {
     saveState({
       publisherSlug: user?.publisher_slug || ps.publisherSlug || 'local-studio',
-      publisherApiKey: '',
-      adminApiKey: adminKey,
-      accessToken,
-      refreshToken,
-      sessionId,
-      expiresAt,
       theme,
-      user,
     });
-  }, [accessToken, refreshToken, sessionId, expiresAt, theme, user, adminKey]);
+  }, [theme, user?.publisher_slug]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -179,12 +173,11 @@ export function usePortalController() {
   const auth = useCallback(
     (opts: { pub?: boolean; admin?: boolean } = {}) => ({
       token: accessToken,
-      adminApiKey: adminKey,
       publisherSlug: user?.publisher_slug || ps.publisherSlug,
       pub: opts.pub,
       admin: opts.admin,
     }),
-    [accessToken, adminKey, user?.publisher_slug],
+    [accessToken, user?.publisher_slug],
   );
 
   const applySession = useCallback((data: SessionResponse) => {
@@ -250,8 +243,7 @@ export function usePortalController() {
   }, [applySession, refreshToken, sessionId, toast]);
 
   useEffect(() => {
-    const onUnauthorized = async (event: Event) => {
-      const detail = (event as CustomEvent<{ path?: string }>).detail;
+    const onUnauthorized = async (detail: { path: string }) => {
       const path = detail?.path || '';
       if (path.includes('/api/v1/accounts/refresh')) return;
 
@@ -266,8 +258,7 @@ export function usePortalController() {
       clearSession('Your session expired or is no longer valid. Please sign in again.', 'err');
     };
 
-    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
+    return subscribeUnauthorized(onUnauthorized);
   }, [accessToken, clearSession, refreshSession, refreshToken, user]);
 
   useEffect(() => {
@@ -558,22 +549,45 @@ export function usePortalController() {
   }, [auth, loadDeveloperHub, toast]);
 
   const onPackageSelected = useCallback((file: File | null) => {
+    const error = validatePackageFile(file);
+    if (error) {
+      toast('err', error);
+      setPublishForm((current) => ({ ...current, packageFile: null }));
+      setPackageValidation(null);
+      return;
+    }
     setPublishForm((current) => ({ ...current, packageFile: file }));
     if (!file) setPackageValidation(null);
-  }, []);
+  }, [toast]);
 
   const onIconSelected = useCallback((file: File | null) => {
+    const error = validateIconFile(file);
+    if (error) {
+      toast('err', error);
+      return;
+    }
     setPublishForm((current) => ({ ...current, iconFile: file }));
-  }, []);
+  }, [toast]);
 
   const onImagesSelected = useCallback((files: FileList | File[] | null) => {
-    setPublishForm((current) => ({ ...current, imageFiles: files ? Array.from(files) : [] }));
-  }, []);
+    const list = files ? Array.from(files) : [];
+    const error = validateImageFiles(list);
+    if (error) {
+      toast('err', error);
+      return;
+    }
+    setPublishForm((current) => ({ ...current, imageFiles: list }));
+  }, [toast]);
 
   const publishPlugin = useCallback(async (event: FormEvent) => {
     event.preventDefault();
     if (!publishForm.packageFile) { toast('err', 'Package is required.'); return; }
-    if (!isLspkgFile(publishForm.packageFile)) { toast('err', 'Only .lspkg packages are allowed.'); return; }
+    const packageError = validatePackageFile(publishForm.packageFile);
+    if (packageError) { toast('err', packageError); return; }
+    const iconError = validateIconFile(publishForm.iconFile);
+    if (iconError) { toast('err', iconError); return; }
+    const imageError = validateImageFiles(publishForm.imageFiles);
+    if (imageError) { toast('err', imageError); return; }
     const videoLinks = splitCsvLike(publishForm.videoLinks);
     const invalidVideo = videoLinks.find((link) => !isAllowedYoutubeUrl(link));
     if (invalidVideo) { toast('err', `Only HTTPS YouTube links are allowed: ${invalidVideo}`); return; }
@@ -760,7 +774,7 @@ export function usePortalController() {
   }, [allPluginsFiltered]);
 
   return {
-    API_BASE,
+    API_BASE: API_BASE_DISPLAY,
     theme,
     setTheme,
     toasts,

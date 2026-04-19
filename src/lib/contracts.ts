@@ -1,7 +1,7 @@
 import { req } from './api';
 import type { DeveloperKey, DeveloperStatus, PackageManifestSummary, PackageValidationResult, PublisherRelease, ReviewQueueItem, PublisherPlugin } from './types';
 import { buildFallbackPackageValidation, deriveDeveloperFallback } from './utils';
-export type AuthOpts = { token?: string; adminApiKey?: string; pub?: boolean; admin?: boolean };
+export type AuthOpts = { token?: string; publisherSlug?: string; pub?: boolean; admin?: boolean };
 function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}; }
 function asStringList(value: unknown): string[] { if (!Array.isArray(value)) return []; return value.map((item) => String(item)).filter(Boolean); }
 function pickList(value: unknown): unknown[] { if (Array.isArray(value)) return value; const obj = asRecord(value); const candidate = obj.items ?? obj.results ?? obj.data ?? obj.keys ?? obj.releases ?? obj.queue; return Array.isArray(candidate) ? candidate : []; }
