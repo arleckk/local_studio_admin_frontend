@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, req, subscribeUnauthorized } from '../lib/api';
-import { API_BASE_DISPLAY, loadState, saveState } from '../lib/storage';
+import { API_BASE_DISPLAY, clearSessionState, loadSessionState, loadState, saveSessionState, saveState } from '../lib/storage';
 import type {
   AdminSummary,
   AdminUser,
@@ -43,6 +43,7 @@ import {
 } from '../lib/utils';
 
 const ps = loadState();
+const sessionState = loadSessionState<SessionUser>();
 
 type ConfirmCtx = { title: string; body: string; onOk: () => void } | null;
 
@@ -74,18 +75,25 @@ const emptyDeveloperStatus: DeveloperStatus = {
   notes: [],
 };
 
+function isPluginInactive(plugin: PublisherPlugin | null | undefined) {
+  if (!plugin) return false;
+  const status = String(plugin.status || '').toLowerCase();
+  return status.includes('deactivated') || status.includes('disabled') || !!plugin.deactivated_at;
+}
+
 export function usePortalController() {
   const [theme, setTheme] = useState<Theme>(ps.theme ?? 'dark');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
   const unauthorizedHandledAt = useRef(0);
   const refreshPromiseRef = useRef<Promise<SessionResponse | null> | null>(null);
+  const lastVerifiedAccessTokenRef = useRef<string | null>(null);
 
-  const [accessToken, setAccessToken] = useState('');
-  const [refreshToken, setRefreshToken] = useState('');
-  const [sessionId, setSessionId] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const [accessToken, setAccessToken] = useState(sessionState.accessToken || '');
+  const [refreshToken, setRefreshToken] = useState(sessionState.refreshToken || '');
+  const [sessionId, setSessionId] = useState(sessionState.sessionId || '');
+  const [expiresAt, setExpiresAt] = useState(sessionState.expiresAt || '');
+  const [user, setUser] = useState<SessionUser | null>(sessionState.user || null);
 
   const [aPage, setAPage] = useState<AdminPage>('dash');
   const [uPage, setUPage] = useState<UserPage>('publish');
@@ -144,6 +152,16 @@ export function usePortalController() {
   }, [theme, user?.publisher_slug]);
 
   useEffect(() => {
+    saveSessionState({
+      accessToken,
+      refreshToken,
+      sessionId,
+      expiresAt,
+      user,
+    });
+  }, [accessToken, refreshToken, sessionId, expiresAt, user]);
+
+  useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
@@ -181,6 +199,7 @@ export function usePortalController() {
   );
 
   const applySession = useCallback((data: SessionResponse) => {
+    lastVerifiedAccessTokenRef.current = null;
     setAccessToken(data.access_token);
     setRefreshToken(data.refresh_token);
     setSessionId(data.session_id);
@@ -191,11 +210,13 @@ export function usePortalController() {
 
   const clearSession = useCallback((reason?: string, kind: Toast['kind'] = 'inf') => {
     refreshPromiseRef.current = null;
+    lastVerifiedAccessTokenRef.current = null;
     setUser(null);
     setAccessToken('');
     setRefreshToken('');
     setSessionId('');
     setExpiresAt('');
+    clearSessionState();
     setSummary(null);
     setRuntime(null);
     setAllPlugins([]);
@@ -262,25 +283,42 @@ export function usePortalController() {
   }, [accessToken, clearSession, refreshSession, refreshToken, user]);
 
   useEffect(() => {
-    if (!accessToken || !user) return;
+    if (!accessToken) return;
+    if (lastVerifiedAccessTokenRef.current === accessToken) return;
+
     let cancelled = false;
+    lastVerifiedAccessTokenRef.current = accessToken;
 
     const verifySession = async () => {
       try {
         const me = await req<SessionUser>('/api/v1/accounts/me', { token: accessToken });
         if (cancelled) return;
-        setUser((current) => (current ? { ...current, ...me } : me));
+        setUser((current) => {
+          if (
+            current
+            && current.id === me.id
+            && current.username === me.username
+            && current.email === me.email
+            && current.is_admin === me.is_admin
+            && current.publisher_slug === me.publisher_slug
+            && JSON.stringify(current.capabilities || []) === JSON.stringify(me.capabilities || [])
+          ) {
+            return current;
+          }
+          return current ? { ...current, ...me } : me;
+        });
       } catch (error) {
         if (cancelled) return;
         if (error instanceof ApiError && error.status === 401) return;
+        lastVerifiedAccessTokenRef.current = null;
       }
     };
 
-    verifySession();
+    void verifySession();
     return () => {
       cancelled = true;
     };
-  }, [accessToken, user]);
+  }, [accessToken]);
 
   useEffect(() => {
     if (!accessToken || !refreshToken || !expiresAt) return;
@@ -339,11 +377,34 @@ export function usePortalController() {
 
   const loadMyPlugins = useCallback(async () => {
     if (!accessToken) return;
-    const pluginPayload = await run('my-plugins', async () => req<unknown>('/api/v1/publishers/plugins', auth()));
+    const pluginPayload = await run('my-plugins', async () => {
+      const candidates = ['/api/v1/publishers/my/plugins', '/api/v1/publishers/plugins'];
+      for (const path of candidates) {
+        try {
+          return await req<unknown>(path, auth());
+        } catch {
+          // continue
+        }
+      }
+      throw new Error('No backend endpoint accepted my plugins listing yet.');
+    });
     if (!pluginPayload) return;
     const plugins = normalizePlugins(pluginPayload);
     const releaseResults = await Promise.allSettled(
-      plugins.map((plugin) => req<unknown>(`/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/releases`, auth())),
+      plugins.map(async (plugin) => {
+        const candidates = [
+          `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}/releases`,
+          `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/releases`,
+        ];
+        for (const path of candidates) {
+          try {
+            return await req<unknown>(path, auth());
+          } catch {
+            // continue
+          }
+        }
+        throw new Error(`No backend endpoint accepted releases for ${plugin.plugin_key}.`);
+      }),
     );
     const releaseMap = new Map<string, PublisherRelease[]>();
     releaseResults.forEach((result, index) => {
@@ -362,7 +423,20 @@ export function usePortalController() {
 
   const loadPluginReleases = useCallback(async (pluginKey: string) => {
     if (!accessToken) return;
-    const payload = await run(`releases-${pluginKey}`, async () => req<unknown>(`/api/v1/publishers/plugins/${encodeURIComponent(pluginKey)}/releases`, auth()));
+    const payload = await run(`releases-${pluginKey}`, async () => {
+      const candidates = [
+        `/api/v1/publishers/my/plugins/${encodeURIComponent(pluginKey)}/releases`,
+        `/api/v1/publishers/plugins/${encodeURIComponent(pluginKey)}/releases`,
+      ];
+      for (const path of candidates) {
+        try {
+          return await req<unknown>(path, auth());
+        } catch {
+          // continue
+        }
+      }
+      throw new Error(`No backend endpoint accepted releases for ${pluginKey}.`);
+    });
     if (!payload) return;
     setSelectedMyPluginKey(pluginKey);
     setReleaseKey(pluginKey);
@@ -667,15 +741,94 @@ export function usePortalController() {
     await Promise.all([loadReviews(), loadMyPlugins(), loadAllPlugins()]);
   }, [auth, loadAllPlugins, loadMyPlugins, loadReviews, toast]);
 
-  const disablePlugin = useCallback(async (pluginKey: string) => {
-    const ok = await run(`disable-plugin-${pluginKey}`, async () => req(`/api/v1/publishers/plugins/${encodeURIComponent(pluginKey)}/disable`, {
-      ...auth(),
-      method: 'POST',
-    }));
-    if (!ok) return;
-    toast('ok', `${pluginKey} disabled.`);
+  const togglePluginEnabled = useCallback(async (plugin: PublisherPlugin) => {
+    const inactive = isPluginInactive(plugin);
+
+    if (inactive) {
+      const ok = await run(`enable-plugin-${plugin.plugin_key}`, async () => {
+        const candidates = [
+          `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}/activate`,
+          `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}/reactivate`,
+          `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}/restore`,
+          `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/enable`,
+          `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/activate`,
+          `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/restore`,
+        ];
+        for (const path of candidates) {
+          try {
+            return await req(path, { ...auth(), method: 'POST' });
+          } catch (error) {
+            const status = error instanceof ApiError ? error.status : 0;
+            if ([404, 405].includes(status)) continue;
+            throw error;
+          }
+        }
+        throw new Error('Backend docs do not expose a plugin enable/reactivate endpoint yet.');
+      });
+      if (!ok) return;
+      toast('ok', `${plugin.display_name} enabled.`);
+    } else {
+      const reason = window.prompt(`Disable ${plugin.display_name}? Optional reason:`, plugin.deactivation_reason || '')?.trim() || '';
+      const form = new FormData();
+      if (reason) form.append('reason', reason);
+      const ok = await run(`disable-plugin-${plugin.plugin_key}`, async () => {
+        const candidates = [
+          `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}/deactivate`,
+          `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}/disable`,
+        ];
+        for (const path of candidates) {
+          try {
+            return await req(path, { ...auth(), method: 'POST', body: form, isForm: true });
+          } catch (error) {
+            const status = error instanceof ApiError ? error.status : 0;
+            if ([404, 405].includes(status)) continue;
+            throw error;
+          }
+        }
+        throw new Error('No backend endpoint accepted plugin disable/deactivate yet.');
+      });
+      if (!ok) return;
+      toast('ok', `${plugin.display_name} disabled.`);
+    }
+
     await Promise.all([loadMyPlugins(), loadAllPlugins()]);
-  }, [auth, loadAllPlugins, loadMyPlugins, toast]);
+    if (selectedMyPluginKey === plugin.plugin_key) await loadPluginReleases(plugin.plugin_key);
+  }, [auth, loadAllPlugins, loadMyPlugins, loadPluginReleases, selectedMyPluginKey, toast]);
+
+  const deletePlugin = useCallback(async (plugin: PublisherPlugin) => {
+    setConfirmCtx({
+      title: `Delete ${plugin.display_name}?`,
+      body: 'This removes the plugin and its related releases/artifacts according to backend policy. This action cannot be undone from the portal.',
+      onOk: async () => {
+        const result = await run(`delete-plugin-${plugin.plugin_key}`, async () => {
+          const candidates = [
+            `/api/v1/publishers/my/plugins/${encodeURIComponent(plugin.plugin_key)}`,
+            `/api/v1/publishers/plugins/${encodeURIComponent(plugin.plugin_key)}`,
+          ];
+          for (const path of candidates) {
+            try {
+              return await req<{ deleted_release_count?: number; deleted_artifact_count?: number } & Record<string, unknown>>(path, { ...auth(), method: 'DELETE' });
+            } catch (error) {
+              const status = error instanceof ApiError ? error.status : 0;
+              if ([404, 405].includes(status)) continue;
+              throw error;
+            }
+          }
+          throw new Error('No backend endpoint accepted plugin deletion yet.');
+        });
+        if (!result) return;
+        const deletedReleases = typeof result.deleted_release_count === 'number' ? result.deleted_release_count : 0;
+        const deletedArtifacts = typeof result.deleted_artifact_count === 'number' ? result.deleted_artifact_count : 0;
+        toast('ok', `${plugin.display_name} deleted.${deletedReleases || deletedArtifacts ? ` Releases: ${deletedReleases}, artifacts: ${deletedArtifacts}.` : ''}`);
+        if (selectedMyPluginKey === plugin.plugin_key) {
+          setSelectedMyPluginKey(null);
+          setReleases([]);
+          setReleaseKey('');
+        }
+        await Promise.all([loadMyPlugins(), loadAllPlugins()]);
+      },
+    });
+  }, [auth, loadAllPlugins, loadMyPlugins, selectedMyPluginKey, toast]);
 
   const retireRelease = useCallback(async (releaseId: string) => {
     const ok = await run(`retire-release-${releaseId}`, async () => {
@@ -831,7 +984,8 @@ export function usePortalController() {
     releaseKey,
     setReleaseKey,
     loadPluginReleases,
-    disablePlugin,
+    togglePluginEnabled,
+    deletePlugin,
     retireRelease,
     pluginFilter,
     setPluginFilter,

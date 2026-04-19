@@ -117,7 +117,8 @@ export default function App() {
           <MyPluginsPage
             isBusy={c.isBusy}
             myPlugins={c.myPlugins}
-            onDisablePlugin={c.disablePlugin}
+            onDeletePlugin={c.deletePlugin}
+            onTogglePlugin={c.togglePluginEnabled}
             onOpenPlugin={c.loadPluginReleases}
             onRefresh={c.loadMyPlugins}
             onRefreshReleases={c.loadPluginReleases}

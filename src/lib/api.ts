@@ -1,4 +1,4 @@
-import { API_BASE } from './storage';
+import { API_BASE, AUTH_USES_COOKIES } from './storage';
 
 export type ReqOpts = {
   method?: string;
@@ -99,6 +99,7 @@ export async function req<T>(path: string, opts: ReqOpts = {}): Promise<T> {
     method: opts.method ?? 'GET',
     headers,
     body,
+    credentials: AUTH_USES_COOKIES ? 'include' : 'same-origin',
   });
 
   const contentType = response.headers.get('content-type') || '';

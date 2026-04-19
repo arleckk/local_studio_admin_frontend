@@ -4,6 +4,39 @@ import { PluginCardGrid } from '../components/plugins/PluginCardGrid';
 import type { PublisherPlugin, PublisherRelease } from '../lib/types';
 import { fmtDT } from '../lib/utils';
 
+function isPluginInactive(plugin: PublisherPlugin | null | undefined) {
+  if (!plugin) return false;
+  const status = String(plugin.status || '').toLowerCase();
+  return status.includes('deactivated') || status.includes('disabled') || !!plugin.deactivated_at;
+}
+
+function PluginActions({
+  isBusy,
+  onDeletePlugin,
+  onTogglePlugin,
+  plugin,
+}: {
+  isBusy: (key: string) => boolean;
+  onDeletePlugin: (plugin: PublisherPlugin) => Promise<void> | void;
+  onTogglePlugin: (plugin: PublisherPlugin) => Promise<void> | void;
+  plugin: PublisherPlugin;
+}) {
+  const inactive = isPluginInactive(plugin);
+  const toggleBusyKey = `${inactive ? 'enable' : 'disable'}-plugin-${plugin.plugin_key}`;
+  const deleteBusyKey = `delete-plugin-${plugin.plugin_key}`;
+
+  return (
+    <div className="row wrap" style={{ gap: 6, marginTop: 10 }}>
+      <button className="btn btn-secondary btn-sm" onClick={() => onTogglePlugin(plugin)} disabled={isBusy(toggleBusyKey)}>
+        {isBusy(toggleBusyKey) ? <Spinner /> : inactive ? 'Enable' : 'Disable'}
+      </button>
+      <button className="btn btn-danger btn-sm" onClick={() => onDeletePlugin(plugin)} disabled={isBusy(deleteBusyKey)}>
+        {isBusy(deleteBusyKey) ? <Spinner /> : 'Delete'}
+      </button>
+    </div>
+  );
+}
+
 function ReleaseRow({ isBusy, onRetire, release }: { isBusy: (key: string) => boolean; onRetire: (releaseId: string) => Promise<void> | void; release: PublisherRelease }) {
   return (
     <div className="release-item">
@@ -39,7 +72,33 @@ function ReleaseRow({ isBusy, onRetire, release }: { isBusy: (key: string) => bo
   );
 }
 
-export function MyPluginsPage({ isBusy, myPlugins, onDisablePlugin, onOpenPlugin, onRefresh, onRefreshReleases, onRetireRelease, releases, selectedMyPlugin }: { isBusy: (key: string) => boolean; myPlugins: PublisherPlugin[]; onDisablePlugin: (pluginKey: string) => Promise<void> | void; onOpenPlugin: (pluginKey: string) => void; onRefresh: () => Promise<void> | void; onRefreshReleases: (pluginKey: string) => Promise<void> | void; onRetireRelease: (releaseId: string) => Promise<void> | void; releases: PublisherRelease[]; selectedMyPlugin: PublisherPlugin | null; }) {
+export function MyPluginsPage({
+  isBusy,
+  myPlugins,
+  onDeletePlugin,
+  onOpenPlugin,
+  onRefresh,
+  onRefreshReleases,
+  onRetireRelease,
+  onTogglePlugin,
+  releases,
+  selectedMyPlugin,
+}: {
+  isBusy: (key: string) => boolean;
+  myPlugins: PublisherPlugin[];
+  onDeletePlugin: (plugin: PublisherPlugin) => Promise<void> | void;
+  onOpenPlugin: (pluginKey: string) => void;
+  onRefresh: () => Promise<void> | void;
+  onRefreshReleases: (pluginKey: string) => Promise<void> | void;
+  onRetireRelease: (releaseId: string) => Promise<void> | void;
+  onTogglePlugin: (plugin: PublisherPlugin) => Promise<void> | void;
+  releases: PublisherRelease[];
+  selectedMyPlugin: PublisherPlugin | null;
+}) {
+  const selectedInactive = isPluginInactive(selectedMyPlugin);
+  const selectedToggleBusyKey = selectedMyPlugin ? `${selectedInactive ? 'enable' : 'disable'}-plugin-${selectedMyPlugin.plugin_key}` : '';
+  const selectedDeleteBusyKey = selectedMyPlugin ? `delete-plugin-${selectedMyPlugin.plugin_key}` : '';
+
   return (
     <div className="vstack">
       <div className="ph">
@@ -67,12 +126,12 @@ export function MyPluginsPage({ isBusy, myPlugins, onDisablePlugin, onOpenPlugin
               onOpen={onOpenPlugin}
               emptyState={<div className="empty"><div className="empty-icon">◈</div><div className="empty-title">No plugins published yet</div><div className="empty-sub">Use Publish to upload your first signed package.</div></div>}
               renderActions={(plugin) => (
-                <div className="row wrap" style={{ gap: 6, marginTop: 10 }}>
-                  <button className="btn btn-secondary btn-sm" onClick={() => onOpenPlugin(plugin.plugin_key)}>Release history</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => onDisablePlugin(plugin.plugin_key)} disabled={isBusy(`disable-plugin-${plugin.plugin_key}`)}>
-                    {isBusy(`disable-plugin-${plugin.plugin_key}`) ? <Spinner /> : 'Disable'}
-                  </button>
-                </div>
+                <>
+                  <div className="row wrap" style={{ gap: 6, marginTop: 10 }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => onOpenPlugin(plugin.plugin_key)}>Release history</button>
+                  </div>
+                  <PluginActions isBusy={isBusy} onDeletePlugin={onDeletePlugin} onTogglePlugin={onTogglePlugin} plugin={plugin} />
+                </>
               )}
             />
           </div>
@@ -102,11 +161,21 @@ export function MyPluginsPage({ isBusy, myPlugins, onDisablePlugin, onOpenPlugin
                   {(selectedMyPlugin.latest_signature_status || selectedMyPlugin.latest_release?.signature_status) && <Badge value={selectedMyPlugin.latest_signature_status || selectedMyPlugin.latest_release?.signature_status} />}
                   {selectedMyPlugin.entitlement_policy && <span className="tag tag-soft">entitlement · {selectedMyPlugin.entitlement_policy}</span>}
                 </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button className="btn btn-secondary btn-sm" onClick={() => onTogglePlugin(selectedMyPlugin)} disabled={isBusy(selectedToggleBusyKey)}>
+                    {isBusy(selectedToggleBusyKey) ? <Spinner /> : selectedInactive ? 'Enable plugin' : 'Disable plugin'}
+                  </button>
+                  <button className="btn btn-danger btn-sm" onClick={() => onDeletePlugin(selectedMyPlugin)} disabled={isBusy(selectedDeleteBusyKey)}>
+                    {isBusy(selectedDeleteBusyKey) ? <Spinner /> : 'Delete plugin'}
+                  </button>
+                </div>
                 <div className="drow"><span className="dkey">Display name</span><span className="dval">{selectedMyPlugin.display_name}</span></div>
                 <div className="drow"><span className="dkey">Plugin key</span><span className="dval-mono">{selectedMyPlugin.plugin_key}</span></div>
                 <div className="drow"><span className="dkey">Publisher</span><span className="dval">{selectedMyPlugin.publisher || selectedMyPlugin.publisher_slug}</span></div>
                 <div className="drow"><span className="dkey">Latest release</span><span className="dval">{selectedMyPlugin.latest_release ? `v${selectedMyPlugin.latest_release.version}` : '—'}</span></div>
                 <div className="drow"><span className="dkey">Updated</span><span className="dval">{fmtDT(selectedMyPlugin.updated_at)}</span></div>
+                {selectedMyPlugin.deactivated_at && <div className="drow"><span className="dkey">Deactivated</span><span className="dval">{fmtDT(selectedMyPlugin.deactivated_at)}</span></div>}
+                {selectedMyPlugin.deactivation_reason && <div className="helper-note">Deactivation reason · {selectedMyPlugin.deactivation_reason}</div>}
                 {selectedMyPlugin.description && <div className="helper-note">{selectedMyPlugin.description}</div>}
                 <div className="publish-file-list">
                   {selectedMyPlugin.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}
