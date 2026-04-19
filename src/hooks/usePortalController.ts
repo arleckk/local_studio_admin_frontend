@@ -16,6 +16,7 @@ import type {
   RuntimeStatus,
   SessionResponse,
   SessionUser,
+  PublishForm,
 } from '../lib/types';
 import {
   loadDeveloperKeys,
@@ -47,19 +48,6 @@ const sessionState = loadSessionState<SessionUser>();
 
 type ConfirmCtx = { title: string; body: string; onOk: () => void } | null;
 
-type PublishForm = {
-  name: string;
-  description: string;
-  tags: string;
-  categories: string;
-  capabilities: string[];
-  changelog: string;
-  videoLinks: string;
-  releaseChannel: string;
-  packageFile: File | null;
-  iconFile: File | null;
-  imageFiles: File[];
-};
 
 const emptyDeveloperStatus: DeveloperStatus = {
   source: 'fallback',
@@ -129,6 +117,8 @@ export function usePortalController() {
     changelog: '',
     videoLinks: '',
     releaseChannel: 'private_beta',
+    entitlementPolicy: 'free',
+    offlineGraceDays: 30,
     packageFile: null,
     iconFile: null,
     imageFiles: [],
@@ -675,6 +665,8 @@ export function usePortalController() {
     form.append('capabilities', JSON.stringify(publishForm.capabilities));
     form.append('changelog', publishForm.changelog);
     form.append('release_channel', publishForm.releaseChannel);
+    form.append('entitlement_policy', publishForm.entitlementPolicy);
+    if (publishForm.entitlementPolicy !== 'free') form.append('offline_grace_days', String(publishForm.offlineGraceDays));
     form.append('video_links', JSON.stringify(videoLinks));
     form.append('package', publishForm.packageFile);
     if (publishForm.iconFile) form.append('icon', publishForm.iconFile);
@@ -702,6 +694,8 @@ export function usePortalController() {
       changelog: '',
       videoLinks: '',
       releaseChannel: 'private_beta',
+      entitlementPolicy: 'free',
+      offlineGraceDays: 30,
       packageFile: null,
       iconFile: null,
       imageFiles: [],

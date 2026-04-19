@@ -48,7 +48,9 @@ function ReleaseRow({ isBusy, onRetire, release }: { isBusy: (key: string) => bo
           {release.release_channel && <Badge value={release.release_channel} />}
           {release.signature_status && <Badge value={release.signature_status} />}
           {release.developer_key_status && <Badge value={release.developer_key_status} />}
-          {release.entitlement_policy && <span className="tag tag-soft">{release.entitlement_policy}</span>}
+          {release.entitlement_policy && <span className="tag tag-soft">entitlement · {release.entitlement_policy}</span>}
+          {release.offline_grace_days != null && release.entitlement_policy && release.entitlement_policy !== 'free' && <span className="tag tag-soft">offline grace · {release.offline_grace_days} days</span>}
+          {typeof release.license_grants_issued === 'number' && release.license_grants_issued > 0 && <span className="tag tag-soft">{release.license_grants_issued} licenses issued</span>}
           {(release.install_policy_badges || []).map((badge) => <span key={badge} className="tag tag-soft">{badge}</span>)}
         </div>
         <div className="plugin-detail-meta">Created {fmtDT(release.created_at)} · Published {fmtDT(release.published_at)} · Approved {fmtDT(release.approved_at)}</div>
@@ -160,6 +162,7 @@ export function MyPluginsPage({
                   {selectedMyPlugin.latest_release_channel && <Badge value={selectedMyPlugin.latest_release_channel} />}
                   {(selectedMyPlugin.latest_signature_status || selectedMyPlugin.latest_release?.signature_status) && <Badge value={selectedMyPlugin.latest_signature_status || selectedMyPlugin.latest_release?.signature_status} />}
                   {selectedMyPlugin.entitlement_policy && <span className="tag tag-soft">entitlement · {selectedMyPlugin.entitlement_policy}</span>}
+                  {selectedMyPlugin.offline_grace_days != null && selectedMyPlugin.entitlement_policy && selectedMyPlugin.entitlement_policy !== 'free' && <span className="tag tag-soft">offline grace · {selectedMyPlugin.offline_grace_days} days</span>}
                 </div>
                 <div className="row wrap" style={{ gap: 8 }}>
                   <button className="btn btn-secondary btn-sm" onClick={() => onTogglePlugin(selectedMyPlugin)} disabled={isBusy(selectedToggleBusyKey)}>
@@ -174,6 +177,8 @@ export function MyPluginsPage({
                 <div className="drow"><span className="dkey">Publisher</span><span className="dval">{selectedMyPlugin.publisher || selectedMyPlugin.publisher_slug}</span></div>
                 <div className="drow"><span className="dkey">Latest release</span><span className="dval">{selectedMyPlugin.latest_release ? `v${selectedMyPlugin.latest_release.version}` : '—'}</span></div>
                 <div className="drow"><span className="dkey">Updated</span><span className="dval">{fmtDT(selectedMyPlugin.updated_at)}</span></div>
+                {selectedMyPlugin.offline_grace_days != null && selectedMyPlugin.entitlement_policy && selectedMyPlugin.entitlement_policy !== 'free' && <div className="drow"><span className="dkey">Offline grace</span><span className="dval">{selectedMyPlugin.offline_grace_days} days</span></div>}
+                {typeof selectedMyPlugin.latest_release?.license_grants_issued === 'number' && selectedMyPlugin.latest_release.license_grants_issued > 0 && <div className="drow"><span className="dkey">Licenses issued</span><span className="dval">{selectedMyPlugin.latest_release.license_grants_issued}</span></div>}
                 {selectedMyPlugin.deactivated_at && <div className="drow"><span className="dkey">Deactivated</span><span className="dval">{fmtDT(selectedMyPlugin.deactivated_at)}</span></div>}
                 {selectedMyPlugin.deactivation_reason && <div className="helper-note">Deactivation reason · {selectedMyPlugin.deactivation_reason}</div>}
                 {selectedMyPlugin.description && <div className="helper-note">{selectedMyPlugin.description}</div>}

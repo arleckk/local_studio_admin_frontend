@@ -159,6 +159,7 @@ export function enrichPlugin(plugin: PublisherPlugin, releases: PublisherRelease
     latest_release_channel: plugin.latest_release_channel ?? latest?.release_channel ?? null,
     latest_signature_status: plugin.latest_signature_status ?? latest?.signature_status ?? null,
     entitlement_policy: plugin.entitlement_policy ?? latest?.entitlement_policy ?? null,
+    offline_grace_days: plugin.offline_grace_days ?? latest?.offline_grace_days ?? null,
     install_policy: plugin.install_policy ?? latest?.install_policy ?? null,
     install_policy_badges: plugin.install_policy_badges ?? latest?.install_policy_badges ?? [],
     policy_warnings: plugin.policy_warnings ?? latest?.policy_warnings ?? [],
@@ -176,6 +177,7 @@ export function deriveDeveloperFallback(userCaps: string[] | undefined, keyCount
     developer_mode_allowed: null,
     local_install_allowed: null,
     signing_keys_registered: keyCount,
+    authorized_namespaces: [],
     warnings: ['Developer status endpoint is not available yet. Showing a local fallback view.'],
     notes: [
       'Private keys stay on the developer device.',
@@ -193,6 +195,7 @@ export function buildFallbackPackageValidation(file: File, releaseChannel: strin
     capabilities: [],
     detected_channel: 'local_dev',
     release_channel: releaseChannel,
+    entitlement_policy: 'free',
     signature: { status: 'pending', key_id: null, algorithm: null, signer_type: null, developer_key_status: null },
     summary: 'Package uploaded. Waiting for backend package validation contract.',
     warnings: ['Manifest, signature and conflict details require the new package validation endpoint in local_studio_backend.'],

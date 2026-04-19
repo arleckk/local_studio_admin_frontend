@@ -303,6 +303,10 @@ export function DeveloperPage({
             <span>Publisher</span>
             <strong>{developerStatus.publisher?.display_name || developerStatus.publisher?.slug || '—'}</strong>
           </div>
+          <div className="developer-mini-stat">
+            <span>Namespaces</span>
+            <strong>{developerStatus.authorized_namespaces?.length || 0}</strong>
+          </div>
         </div>
       </div>
 
@@ -382,6 +386,18 @@ export function DeveloperPage({
               </div>
             </>
           ) : null}
+
+          <div className="field" style={{ margin: 0 }}>
+            <label className="field-label">Authorized namespaces</label>
+            <div className="publish-file-list">
+              {(developerStatus.authorized_namespaces || []).length > 0 ? (
+                (developerStatus.authorized_namespaces || []).map((namespace) => <span key={namespace} className="tag">{namespace}</span>)
+              ) : (
+                <span className="tag tag-soft">No namespaces registered</span>
+              )}
+            </div>
+            <span className="field-hint">Desktop Developer Mode should only allow locally signed packages whose plugin key namespace matches one of these entries.</span>
+          </div>
 
           <div className="field" style={{ margin: 0 }}>
             <label className="field-label">Relevant capabilities</label>
