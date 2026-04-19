@@ -23,7 +23,7 @@ export function ProfilePage({ isBusy, onSubmit, pwForm, setPwForm, user }: { isB
         <div className="card-head">
           <div>
             <div className="card-title">Change password</div>
-            <div className="card-sub">This still depends on the backend account contract.</div>
+            <div className="card-sub">Changing the password now invalidates active sessions. After submit, the portal will ask the user to sign in again.</div>
           </div>
         </div>
         <div className="card-body">

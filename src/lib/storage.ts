@@ -17,7 +17,7 @@ export function loadState(): PersistedState {
   const defaults: PersistedState = {
     publisherSlug: 'local-studio',
     publisherApiKey: '',
-    adminApiKey: import.meta.env.VITE_DEFAULT_ADMIN_API_KEY?.trim() || 'local-studio-backend-admin',
+    adminApiKey: import.meta.env.VITE_DEFAULT_ADMIN_API_KEY?.trim() || '',
     accessToken: '', refreshToken: '', sessionId: '', expiresAt: '',
     theme: 'dark', user: null,
   };

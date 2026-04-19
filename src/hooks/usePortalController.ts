@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, req } from '../lib/api';
+import { ApiError, req, UNAUTHORIZED_EVENT } from '../lib/api';
 import { API_BASE, loadState, saveState } from '../lib/storage';
 import type {
   AdminSummary,
@@ -76,6 +76,8 @@ export function usePortalController() {
   const [theme, setTheme] = useState<Theme>(ps.theme ?? 'dark');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
+  const unauthorizedHandledAt = useRef(0);
+  const refreshPromiseRef = useRef<Promise<SessionResponse | null> | null>(null);
 
   const [accessToken, setAccessToken] = useState(ps.accessToken);
   const [refreshToken, setRefreshToken] = useState(ps.refreshToken);
@@ -164,6 +166,9 @@ export function usePortalController() {
     try {
       return await fn();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401 && (accessToken || user)) {
+        return null;
+      }
       toast('err', error instanceof ApiError ? error.message : String(error));
       return null;
     } finally {
@@ -188,7 +193,117 @@ export function usePortalController() {
     setSessionId(data.session_id);
     setExpiresAt(data.expires_at);
     setUser(data.user);
+    setAuthTab('login');
   }, []);
+
+  const clearSession = useCallback((reason?: string, kind: Toast['kind'] = 'inf') => {
+    refreshPromiseRef.current = null;
+    setUser(null);
+    setAccessToken('');
+    setRefreshToken('');
+    setSessionId('');
+    setExpiresAt('');
+    setSummary(null);
+    setRuntime(null);
+    setAllPlugins([]);
+    setMyPlugins([]);
+    setReleases([]);
+    setReviewQueue([]);
+    setReviewSummary(null);
+    setAdminUsers([]);
+    setUsersTotal(0);
+    setDeveloperStatus(emptyDeveloperStatus);
+    setDeveloperKeys([]);
+    setPackageValidation(null);
+    setSelectedMyPluginKey(null);
+    setReleaseKey('');
+    setAPage('dash');
+    setUPage('developer');
+    setAuthTab('login');
+    setLoginForm((current) => ({ ...current, pw: '' }));
+    if (reason) toast(kind, reason);
+  }, [toast]);
+
+  const refreshSession = useCallback(async (reason: 'proactive' | 'unauthorized' | 'manual' = 'proactive') => {
+    if (!refreshToken) return null;
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+
+    const task = (async () => {
+      try {
+        const data = await req<SessionResponse>('/api/v1/accounts/refresh', {
+          method: 'POST',
+          body: { refresh_token: refreshToken, session_id: sessionId || null },
+          suppressUnauthorizedEvent: true,
+        });
+        applySession(data);
+        if (reason === 'manual') toast('ok', 'Session refreshed.');
+        return data;
+      } catch {
+        return null;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = task;
+    return task;
+  }, [applySession, refreshToken, sessionId, toast]);
+
+  useEffect(() => {
+    const onUnauthorized = async (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string }>).detail;
+      const path = detail?.path || '';
+      if (path.includes('/api/v1/accounts/refresh')) return;
+
+      const now = Date.now();
+      if (now - unauthorizedHandledAt.current < 800) return;
+      unauthorizedHandledAt.current = now;
+      if (!accessToken && !user) return;
+
+      const refreshed = refreshToken ? await refreshSession('unauthorized') : null;
+      if (refreshed) return;
+
+      clearSession('Your session expired or is no longer valid. Please sign in again.', 'err');
+    };
+
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized as EventListener);
+  }, [accessToken, clearSession, refreshSession, refreshToken, user]);
+
+  useEffect(() => {
+    if (!accessToken || !user) return;
+    let cancelled = false;
+
+    const verifySession = async () => {
+      try {
+        const me = await req<SessionUser>('/api/v1/accounts/me', { token: accessToken });
+        if (cancelled) return;
+        setUser((current) => (current ? { ...current, ...me } : me));
+      } catch (error) {
+        if (cancelled) return;
+        if (error instanceof ApiError && error.status === 401) return;
+      }
+    };
+
+    verifySession();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, user]);
+
+  useEffect(() => {
+    if (!accessToken || !refreshToken || !expiresAt) return;
+    const expiresMs = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expiresMs)) return;
+
+    const leadTimeMs = 60_000;
+    const delay = Math.max(0, expiresMs - Date.now() - leadTimeMs);
+    const timer = window.setTimeout(() => {
+      void refreshSession('proactive');
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [accessToken, expiresAt, refreshSession, refreshToken]);
 
   const refreshCapabilities = useCallback(async () => {
     const payload = await run('capabilities', async () => {
@@ -369,35 +484,14 @@ export function usePortalController() {
   const handleLogout = useCallback(async () => {
     await run('logout', async () => {
       try {
-        await req('/api/v1/accounts/logout', { method: 'POST', token: accessToken, body: { refresh_token: refreshToken || null } });
+        await req('/api/v1/accounts/logout', { method: 'POST', token: accessToken, body: { refresh_token: refreshToken || null }, suppressUnauthorizedEvent: true });
       } catch {
         // ignore logout request errors
       }
-      setUser(null);
-      setAccessToken('');
-      setRefreshToken('');
-      setSessionId('');
-      setExpiresAt('');
-      setSummary(null);
-      setRuntime(null);
-      setAllPlugins([]);
-      setMyPlugins([]);
-      setReleases([]);
-      setReviewQueue([]);
-      setReviewSummary(null);
-      setAdminUsers([]);
-      setUsersTotal(0);
-      setDeveloperStatus(emptyDeveloperStatus);
-      setDeveloperKeys([]);
-      setPackageValidation(null);
-      setSelectedMyPluginKey(null);
-      setReleaseKey('');
-      setAPage('dash');
-      setUPage('publish');
-      toast('ok', 'Signed out.');
+      clearSession('Signed out.', 'ok');
       return true;
     });
-  }, [accessToken, refreshToken, toast]);
+  }, [accessToken, clearSession, refreshToken]);
 
   const handleChangePassword = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -409,8 +503,8 @@ export function usePortalController() {
     }));
     if (!ok) return;
     setPwForm({ current: '', next: '', confirm: '' });
-    toast('ok', 'Password updated.');
-  }, [accessToken, pwForm.confirm, pwForm.current, pwForm.next, toast]);
+    clearSession('Password changed. Please sign in again with your new password.', 'ok');
+  }, [accessToken, clearSession, pwForm.confirm, pwForm.current, pwForm.next, toast]);
 
   const handleRegisterDeveloperKey = useCallback(async (event: FormEvent) => {
     event.preventDefault();
