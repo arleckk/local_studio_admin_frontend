@@ -98,12 +98,15 @@ export default function App() {
         {selectedPage === 'publish' && (
           <PublishPage
             capabilityOptions={c.capabilityOptions}
+            developerStatus={c.developerStatus}
             isBusy={c.isBusy}
             onCapabilityRefresh={c.refreshCapabilities}
             onIconSelected={c.onIconSelected}
             onImagesSelected={c.onImagesSelected}
+            onOpenDeveloper={() => c.isAdmin ? c.setAPage('developer') : c.setUPage('developer')}
             onPackageSelected={c.onPackageSelected}
             options={c.releaseChannelOptions}
+            packageInspection={c.packageInspection}
             packageValidation={c.packageValidation}
             publishDrag={c.publishDrag}
             publishForm={c.publishForm}

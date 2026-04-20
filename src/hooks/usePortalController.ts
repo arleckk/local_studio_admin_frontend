@@ -7,6 +7,7 @@ import type {
   CapabilityOption,
   DeveloperKey,
   DeveloperStatus,
+  PackageClientInspection,
   PackageValidationResult,
   PublisherPlugin,
   PublisherPublishResponse,
@@ -42,6 +43,7 @@ import {
   splitCsvLike,
   toReleaseChannelOptions,
 } from '../lib/utils';
+import { detectImageKind, inspectLspkgFile, isZipMagic, readFileBytes } from '../lib/packageInspector';
 
 const ps = loadState();
 const sessionState = loadSessionState<SessionUser>();
@@ -99,6 +101,7 @@ export function usePortalController() {
   const [developerStatus, setDeveloperStatus] = useState<DeveloperStatus>(emptyDeveloperStatus);
   const [developerKeys, setDeveloperKeys] = useState<DeveloperKey[]>([]);
   const [packageValidation, setPackageValidation] = useState<PackageValidationResult | null>(null);
+  const [packageInspection, setPackageInspection] = useState<PackageClientInspection | null>(null);
 
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [pluginFilter, setPluginFilter] = useState('all');
@@ -116,7 +119,7 @@ export function usePortalController() {
     capabilities: [],
     changelog: '',
     videoLinks: '',
-    releaseChannel: 'private_beta',
+    releaseChannel: 'marketplace_release',
     entitlementPolicy: 'free',
     offlineGraceDays: 30,
     packageFile: null,
@@ -219,6 +222,7 @@ export function usePortalController() {
     setDeveloperStatus(emptyDeveloperStatus);
     setDeveloperKeys([]);
     setPackageValidation(null);
+    setPackageInspection(null);
     setSelectedMyPluginKey(null);
     setReleaseKey('');
     setAPage('dash');
@@ -465,28 +469,56 @@ export function usePortalController() {
 
   const loadDeveloperHub = useCallback(async () => {
     if (!accessToken) return;
-    const [keys, status] = await Promise.all([
-      run('developer-keys', async () => loadDeveloperKeys(auth())),
-      run('developer-status', async () => loadDeveloperStatusWithFallback(auth(), user?.capabilities, developerKeys.length)),
-    ]);
+    const keys = await run('developer-keys', async () => loadDeveloperKeys(auth()));
     if (keys) setDeveloperKeys(keys);
+    const status = await run('developer-status', async () => loadDeveloperStatusWithFallback(auth(), user?.capabilities, keys?.length ?? developerKeys.length));
     if (status) setDeveloperStatus(status);
   }, [accessToken, auth, developerKeys.length, user?.capabilities]);
 
-  const validateSelectedPackage = useCallback(async (file: File | null, releaseChannel: string) => {
+  const mergeValidationWithInspection = useCallback((
+    validation: PackageValidationResult,
+    inspection: PackageClientInspection | null,
+    releaseChannel: string,
+  ): PackageValidationResult => {
+    if (!inspection) return validation;
+    const detectedChannel = inspection.package_metadata?.distribution_channel || inspection.manifest?.declared_channel || validation.detected_channel || releaseChannel;
+    return {
+      ...validation,
+      manifest: validation.manifest || inspection.manifest,
+      plugin_key: validation.plugin_key || inspection.manifest?.plugin_key || null,
+      capabilities: (validation.capabilities?.length ? validation.capabilities : inspection.manifest?.capabilities) || [],
+      detected_channel: detectedChannel,
+      signature:
+        validation.signature?.status && validation.signature.status !== 'pending'
+          ? validation.signature
+          : {
+              ...(validation.signature || {}),
+              status: inspection.signature.status,
+              key_id: validation.signature?.key_id || inspection.signature.key_id || null,
+              algorithm: validation.signature?.algorithm || inspection.signature.algorithm || null,
+            },
+      warnings: [...new Set([...(inspection.warnings || []), ...(validation.warnings || [])])],
+      errors: [...new Set([...(inspection.errors || []), ...(validation.errors || [])])],
+    };
+  }, []);
+
+  const validateSelectedPackage = useCallback(async (
+    file: File | null,
+    releaseChannel: string,
+    inspectionOverride?: PackageClientInspection | null,
+  ) => {
     if (!file) {
       setPackageValidation(null);
       return;
     }
     const result = await run('package-validate', async () => validatePackageContract(auth(), file, releaseChannel));
-    const nextValidation = result || buildFallbackPackageValidation(file, releaseChannel);
+    const nextValidation = mergeValidationWithInspection(
+      result || buildFallbackPackageValidation(file, releaseChannel),
+      inspectionOverride ?? packageInspection,
+      releaseChannel,
+    );
     setPackageValidation(nextValidation);
-    setPublishForm((current) => ({
-      ...current,
-      name: current.name || nextValidation.manifest?.display_name || current.name,
-      capabilities: current.capabilities.length ? current.capabilities : (nextValidation.capabilities || []),
-    }));
-  }, [auth]);
+  }, [auth, mergeValidationWithInspection, packageInspection]);
 
   useEffect(() => {
     if (!isLoggedIn) return;
@@ -502,9 +534,10 @@ export function usePortalController() {
   }, [isLoggedIn]);
 
   useEffect(() => {
-    if (!publishForm.packageFile) return;
-    validateSelectedPackage(publishForm.packageFile, publishForm.releaseChannel);
-  }, [publishForm.packageFile, publishForm.releaseChannel, validateSelectedPackage]);
+    if (!publishForm.packageFile || !packageInspection) return;
+    if (packageValidation?.release_channel === publishForm.releaseChannel) return;
+    void validateSelectedPackage(publishForm.packageFile, publishForm.releaseChannel, packageInspection);
+  }, [packageInspection, packageValidation?.release_channel, publishForm.packageFile, publishForm.releaseChannel, validateSelectedPackage]);
 
   useEffect(() => {
     if (selectedMyPluginKey) {
@@ -612,36 +645,93 @@ export function usePortalController() {
     await loadDeveloperHub();
   }, [auth, loadDeveloperHub, toast]);
 
-  const onPackageSelected = useCallback((file: File | null) => {
+  const validateRealImage = useCallback(async (file: File | null, label: string) => {
+    if (!file) return null;
+    const bytes = await readFileBytes(file);
+    return detectImageKind(bytes) ? null : `${label} must be a real PNG, JPG, WEBP or GIF image.`;
+  }, []);
+
+  const onPackageSelected = useCallback(async (file: File | null) => {
     const error = validatePackageFile(file);
     if (error) {
       toast('err', error);
       setPublishForm((current) => ({ ...current, packageFile: null }));
+      setPackageInspection(null);
       setPackageValidation(null);
       return;
     }
-    setPublishForm((current) => ({ ...current, packageFile: file }));
-    if (!file) setPackageValidation(null);
-  }, [toast]);
 
-  const onIconSelected = useCallback((file: File | null) => {
+    if (!file) {
+      setPublishForm((current) => ({ ...current, packageFile: null }));
+      setPackageInspection(null);
+      setPackageValidation(null);
+      return;
+    }
+
+    const packageBytes = await readFileBytes(file);
+    if (!isZipMagic(packageBytes)) {
+      toast('err', 'Package is not a valid ZIP-based .lspkg file.');
+      setPublishForm((current) => ({ ...current, packageFile: null }));
+      setPackageInspection(null);
+      setPackageValidation(null);
+      return;
+    }
+
+    const inspection = await inspectLspkgFile(file);
+    setPackageInspection(inspection);
+
+    const derivedChannel = inspection.package_metadata?.distribution_channel || inspection.manifest?.declared_channel || 'marketplace_release';
+
+    setPublishForm((current) => ({
+      ...current,
+      packageFile: file,
+      name: inspection.manifest?.display_name || '',
+      description: inspection.manifest?.description || '',
+      tags: (inspection.manifest?.tags || []).join(', '),
+      categories: (inspection.manifest?.categories || []).join(', '),
+      capabilities: inspection.manifest?.capabilities || [],
+      releaseChannel: derivedChannel === 'private_beta' ? 'private_beta' : 'marketplace_release',
+    }));
+
+    if (inspection.errors.length > 0) {
+      setPackageValidation(mergeValidationWithInspection(buildFallbackPackageValidation(file, derivedChannel), inspection, derivedChannel));
+      toast('err', inspection.errors[0]);
+      return;
+    }
+
+    await validateSelectedPackage(file, derivedChannel, inspection);
+  }, [mergeValidationWithInspection, toast, validateSelectedPackage]);
+
+  const onIconSelected = useCallback(async (file: File | null) => {
     const error = validateIconFile(file);
     if (error) {
       toast('err', error);
       return;
     }
+    const magicError = await validateRealImage(file, 'Icon');
+    if (magicError) {
+      toast('err', magicError);
+      return;
+    }
     setPublishForm((current) => ({ ...current, iconFile: file }));
-  }, [toast]);
+  }, [toast, validateRealImage]);
 
-  const onImagesSelected = useCallback((files: FileList | File[] | null) => {
+  const onImagesSelected = useCallback(async (files: FileList | File[] | null) => {
     const list = files ? Array.from(files) : [];
     const error = validateImageFiles(list);
     if (error) {
       toast('err', error);
       return;
     }
+    for (const file of list) {
+      const magicError = await validateRealImage(file, `Image ${file.name}`);
+      if (magicError) {
+        toast('err', magicError);
+        return;
+      }
+    }
     setPublishForm((current) => ({ ...current, imageFiles: list }));
-  }, [toast]);
+  }, [toast, validateRealImage]);
 
   const publishPlugin = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -652,19 +742,29 @@ export function usePortalController() {
     if (iconError) { toast('err', iconError); return; }
     const imageError = validateImageFiles(publishForm.imageFiles);
     if (imageError) { toast('err', imageError); return; }
+    const packageBytes = await readFileBytes(publishForm.packageFile);
+    if (!isZipMagic(packageBytes)) { toast('err', 'Package is not a valid ZIP-based .lspkg file.'); return; }
+    const iconMagicError = await validateRealImage(publishForm.iconFile, 'Icon');
+    if (iconMagicError) { toast('err', iconMagicError); return; }
+    for (const image of publishForm.imageFiles) {
+      const realImageError = await validateRealImage(image, `Image ${image.name}`);
+      if (realImageError) { toast('err', realImageError); return; }
+    }
     const videoLinks = splitCsvLike(publishForm.videoLinks);
     const invalidVideo = videoLinks.find((link) => !isAllowedYoutubeUrl(link));
     if (invalidVideo) { toast('err', `Only HTTPS YouTube links are allowed: ${invalidVideo}`); return; }
-    if ((packageValidation?.errors.length || 0) > 0) { toast('err', 'Resolve package validation errors before submit.'); return; }
+    if ((packageInspection?.errors.length || 0) > 0 || (packageValidation?.errors.length || 0) > 0) { toast('err', 'Resolve package validation errors before submit.'); return; }
 
     const form = new FormData();
     form.append('name', publishForm.name);
+    form.append('display_name', publishForm.name);
     form.append('description', publishForm.description);
     form.append('tags', JSON.stringify(splitCsvLike(publishForm.tags)));
     form.append('categories', JSON.stringify(splitCsvLike(publishForm.categories)));
     form.append('capabilities', JSON.stringify(publishForm.capabilities));
     form.append('changelog', publishForm.changelog);
     form.append('release_channel', publishForm.releaseChannel);
+    form.append('distribution_channel', publishForm.releaseChannel);
     form.append('entitlement_policy', publishForm.entitlementPolicy);
     if (publishForm.entitlementPolicy !== 'free') form.append('offline_grace_days', String(publishForm.offlineGraceDays));
     form.append('video_links', JSON.stringify(videoLinks));
@@ -693,16 +793,17 @@ export function usePortalController() {
       capabilities: [],
       changelog: '',
       videoLinks: '',
-      releaseChannel: 'private_beta',
+      releaseChannel: 'marketplace_release',
       entitlementPolicy: 'free',
       offlineGraceDays: 30,
       packageFile: null,
       iconFile: null,
       imageFiles: [],
     });
+    setPackageInspection(null);
     setPackageValidation(null);
     await Promise.all([loadAllPlugins(), loadMyPlugins(), isAdmin ? loadReviews() : Promise.resolve()]);
-  }, [auth, isAdmin, loadAllPlugins, loadMyPlugins, loadReviews, packageValidation?.errors.length, publishForm, toast]);
+  }, [auth, isAdmin, loadAllPlugins, loadMyPlugins, loadReviews, packageInspection?.errors.length, packageValidation?.errors.length, publishForm, toast, validateRealImage]);
 
   const setUserStatus = useCallback(async (userId: string, status: 'active' | 'suspended') => {
     const ok = await run(`user-status-${userId}`, async () => req(`/api/v1/admin/users/${encodeURIComponent(userId)}/status`, {
@@ -957,6 +1058,7 @@ export function usePortalController() {
     revokeDeveloperKey,
     capabilityOptions,
     refreshCapabilities,
+    packageInspection,
     packageValidation,
     publishForm,
     setPublishForm,

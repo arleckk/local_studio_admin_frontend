@@ -177,6 +177,10 @@ export function deriveDeveloperFallback(userCaps: string[] | undefined, keyCount
     developer_mode_allowed: null,
     local_install_allowed: null,
     signing_keys_registered: keyCount,
+    active_key_id: null,
+    authorized: null,
+    local_key: null,
+    remote_key: keyCount > 0 ? { state: 'registered', key_id: null, matches_local_key: null } : null,
     authorized_namespaces: [],
     warnings: ['Developer status endpoint is not available yet. Showing a local fallback view.'],
     notes: [
@@ -193,11 +197,11 @@ export function buildFallbackPackageValidation(file: File, releaseChannel: strin
     manifest: null,
     plugin_key: null,
     capabilities: [],
-    detected_channel: 'local_dev',
+    detected_channel: releaseChannel || 'marketplace_release',
     release_channel: releaseChannel,
     entitlement_policy: 'free',
     signature: { status: 'pending', key_id: null, algorithm: null, signer_type: null, developer_key_status: null },
-    summary: 'Package uploaded. Waiting for backend package validation contract.',
+    summary: 'Package uploaded. Waiting for backend package inspection.',
     warnings: ['Manifest, signature and conflict details require the new package validation endpoint in local_studio_backend.'],
     conflicts: [],
     errors: isLspkgFile(file) ? [] : ['Only .lspkg packages are supported.'],
@@ -209,7 +213,7 @@ export function buildFallbackPackageValidation(file: File, releaseChannel: strin
 
 export function toReleaseChannelOptions() {
   return [
-    { value: 'private_beta', label: 'Private Beta', description: 'Controlled rollout for invited testers or limited audiences.' },
-    { value: 'marketplace_release', label: 'Marketplace Release', description: 'Formal marketplace publish path with backend review and policy checks.' },
+    { value: 'marketplace_release', label: 'Marketplace release', description: 'Public catalog path after backend review.' },
+    { value: 'private_beta', label: 'Private beta', description: 'Limited visibility for invited users only.' },
   ];
 }

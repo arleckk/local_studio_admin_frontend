@@ -183,6 +183,18 @@ export type DeveloperPublisherSummary = {
   status?: string | null;
 };
 
+export type DeveloperKeyState = {
+  has_local_private_key?: boolean | null;
+  key_id?: string | null;
+  status?: string | null;
+};
+
+export type DeveloperRemoteKeyState = {
+  state?: string | null;
+  key_id?: string | null;
+  matches_local_key?: boolean | null;
+};
+
 export type DeveloperStatus = {
   source: 'backend' | 'fallback';
   status?: string | null;
@@ -194,6 +206,9 @@ export type DeveloperStatus = {
   local_install_allowed?: boolean | null;
   signing_keys_registered?: number | null;
   active_key_id?: string | null;
+  authorized?: boolean | null;
+  local_key?: DeveloperKeyState | null;
+  remote_key?: DeveloperRemoteKeyState | null;
   authorized_namespaces?: string[];
   warnings: string[];
   notes: string[];
@@ -203,9 +218,14 @@ export type PackageManifestSummary = {
   plugin_key?: string | null;
   display_name?: string | null;
   version?: string | null;
+  description?: string | null;
   capabilities?: string[];
+  tags?: string[];
+  categories?: string[];
   declared_channel?: string | null;
   manifest_version?: string | null;
+  os_support?: string[];
+  permissions?: string[];
 };
 
 export type PackageSignatureSummary = {
@@ -226,6 +246,7 @@ export type PackageValidationResult = {
   release_channel?: string | null;
   entitlement_policy?: string | null;
   signature?: PackageSignatureSummary | null;
+  security_scan_status?: string | null;
   summary?: string | null;
   warnings: string[];
   conflicts: string[];
@@ -250,4 +271,16 @@ export type PublishForm = {
   packageFile: File | null;
   iconFile: File | null;
   imageFiles: File[];
+};
+
+export type PackageClientInspection = {
+  manifest: PackageManifestSummary | null;
+  package_metadata?: { distribution_channel?: string | null } | null;
+  signature: {
+    status: 'signed' | 'unsigned' | 'invalid';
+    key_id?: string | null;
+    algorithm?: string | null;
+  };
+  warnings: string[];
+  errors: string[];
 };

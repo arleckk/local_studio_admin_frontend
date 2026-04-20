@@ -59,6 +59,9 @@ export function normalizeDeveloperStatus(payload: unknown, fallbackCaps: string[
   const caps = asStringList(obj.capabilities ?? obj.allowed_capabilities ?? obj.permissions ?? obj.effective_capabilities);
   if (!Object.keys(obj).length) return deriveDeveloperFallback(fallbackCaps, keyCount);
 
+  const localKey = asRecord(obj.local_key ?? obj.localKey);
+  const remoteKey = asRecord(obj.remote_key ?? obj.remoteKey);
+
   return {
     source: 'backend',
     status: String(obj.status ?? obj.account_status ?? 'active'),
@@ -103,6 +106,36 @@ export function normalizeDeveloperStatus(payload: unknown, fallbackCaps: string[
           : null,
     signing_keys_registered: typeof obj.signing_keys_registered === 'number' ? obj.signing_keys_registered : keyCount,
     active_key_id: typeof obj.active_key_id === 'string' ? obj.active_key_id : null,
+    authorized:
+      typeof obj.authorized === 'boolean'
+        ? obj.authorized
+        : typeof obj.remote_authorized === 'boolean'
+          ? obj.remote_authorized
+          : null,
+    local_key: Object.keys(localKey).length
+      ? {
+          has_local_private_key:
+            typeof localKey.has_local_private_key === 'boolean'
+              ? localKey.has_local_private_key
+              : typeof localKey.has_private_key === 'boolean'
+                ? localKey.has_private_key
+                : null,
+          key_id: typeof localKey.key_id === 'string' ? localKey.key_id : null,
+          status: typeof localKey.status === 'string' ? localKey.status : null,
+        }
+      : null,
+    remote_key: Object.keys(remoteKey).length
+      ? {
+          state: typeof remoteKey.state === 'string' ? remoteKey.state : typeof remoteKey.status === 'string' ? remoteKey.status : null,
+          key_id: typeof remoteKey.key_id === 'string' ? remoteKey.key_id : null,
+          matches_local_key:
+            typeof remoteKey.matches_local_key === 'boolean'
+              ? remoteKey.matches_local_key
+              : typeof remoteKey.matches === 'boolean'
+                ? remoteKey.matches
+                : null,
+        }
+      : null,
     authorized_namespaces: asStringList(obj.authorized_namespaces ?? publisher.authorized_namespaces),
     warnings: asStringList(obj.warnings ?? obj.policy_warnings),
     notes: asStringList(obj.notes ?? obj.guidance),
@@ -137,7 +170,10 @@ export function normalizeManifest(entry: unknown): PackageManifestSummary | null
     plugin_key: typeof obj.plugin_key === 'string' ? obj.plugin_key : typeof obj.id === 'string' ? obj.id : null,
     display_name: typeof obj.display_name === 'string' ? obj.display_name : typeof obj.name === 'string' ? obj.name : null,
     version: typeof obj.version === 'string' ? obj.version : typeof obj.plugin_version === 'string' ? obj.plugin_version : null,
+    description: typeof obj.description === 'string' ? obj.description : null,
     capabilities: asStringList(obj.capabilities),
+    tags: asStringList(obj.tags ?? obj.keywords),
+    categories: asStringList(obj.categories),
     declared_channel:
       typeof obj.declared_channel === 'string'
         ? obj.declared_channel
@@ -145,6 +181,8 @@ export function normalizeManifest(entry: unknown): PackageManifestSummary | null
           ? obj.channel
           : null,
     manifest_version: typeof obj.manifest_version === 'string' ? obj.manifest_version : null,
+    os_support: asStringList(obj.os_support ?? asRecord(obj.compatibility).os_support),
+    permissions: asStringList(obj.permissions),
   };
 }
 
@@ -153,6 +191,7 @@ export function normalizePackageValidation(payload: unknown, file: File, release
   const obj = asRecord(payload);
   if (!Object.keys(obj).length) return fallback;
   const signature = asRecord(obj.signature ?? obj.signature_summary ?? obj.developer_signature);
+  const securityScan = asRecord(obj.security_scan ?? obj.security_scan_summary);
 
   return {
     source: 'backend',
@@ -192,6 +231,12 @@ export function normalizePackageValidation(payload: unknown, file: File, release
           developer_key_status: typeof signature.developer_key_status === 'string' ? signature.developer_key_status : null,
         }
       : fallback.signature,
+    security_scan_status:
+      typeof securityScan.status === 'string'
+        ? securityScan.status
+        : typeof obj.security_scan_status === 'string'
+          ? obj.security_scan_status
+          : null,
     summary: typeof obj.summary === 'string' ? obj.summary : typeof obj.message === 'string' ? obj.message : fallback.summary,
     warnings: asStringList(obj.warnings),
     conflicts: asStringList(obj.conflicts ?? obj.validation_conflicts),
@@ -345,7 +390,7 @@ export async function validatePackageContract(auth: AuthOpts, file: File, releas
   form.append('release_channel', releaseChannel);
   try {
     const payload = await tryRequest(
-      ['/api/v1/publishers/packages/validate', '/api/v1/publishers/package-validation', '/api/v1/publishers/validate-package', '/api/v1/publishers/publish/validate'],
+      ['/api/v1/publishers/releases/inspect', '/api/v1/publishers/packages/validate', '/api/v1/publishers/package-validation', '/api/v1/publishers/validate-package', '/api/v1/publishers/publish/validate'],
       (path) => req<unknown>(path, { ...auth, method: 'POST', body: form, isForm: true }),
     );
     return normalizePackageValidation(payload, file, releaseChannel);

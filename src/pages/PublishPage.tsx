@@ -1,14 +1,30 @@
-import type { Dispatch, FormEvent, SetStateAction } from 'react';
+import { useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { Badge } from '../components/common/Badge';
 import { CapabilityMultiSelect } from '../components/common/CapabilityMultiSelect';
 import { FileDropZone } from '../components/common/FileDropZone';
 import { Spinner } from '../components/common/Spinner';
-import type { CapabilityOption, PackageValidationResult, PublishForm } from '../lib/types';
+import type {
+  CapabilityOption,
+  DeveloperStatus,
+  PackageClientInspection,
+  PackageValidationResult,
+  PublishForm,
+} from '../lib/types';
+
+type PublishStep = 1 | 2 | 3;
+
+type GateState = {
+  tone: 'ok' | 'warn';
+  canSubmit: boolean;
+  message: string;
+  actionLabel?: string;
+};
 
 const entitlementOptions: Array<{
   value: PublishForm['entitlementPolicy'];
   label: string;
   description: string;
+  disabled?: boolean;
 }> = [
   {
     value: 'free',
@@ -17,53 +33,94 @@ const entitlementOptions: Array<{
   },
   {
     value: 'paid',
-    label: 'Paid',
-    description: 'Requires a marketplace license grant for installation and offline use.',
+    label: 'Paid / Freemium',
+    description: 'Requires license grant. Not available yet.',
+    disabled: true,
   },
   {
     value: 'freemium',
-    label: 'Freemium',
-    description: 'Basic access can be free while advanced capabilities use entitlement checks.',
+    label: 'Paid / Freemium',
+    description: 'Requires license grant. Not available yet.',
+    disabled: true,
   },
 ];
 
-const graceOptions = [7, 14, 30, 60, 90];
+const reviewColumns: Array<{ key: keyof Pick<PackageValidationResult, 'warnings' | 'conflicts' | 'policy_warnings'>; label: string; tone: 'warn' | 'ok' }> = [
+  { key: 'warnings', label: 'Warnings', tone: 'warn' },
+  { key: 'conflicts', label: 'Conflicts', tone: 'ok' },
+  { key: 'policy_warnings', label: 'Policy', tone: 'ok' },
+];
 
-function ValidationList({
-  emptyLabel,
-  items,
-  title,
-  tone,
-}: {
-  emptyLabel: string;
-  items: string[];
-  title: string;
-  tone: 'info' | 'warn' | 'err';
-}) {
+function uniq(items: Array<string | null | undefined>) {
+  return [...new Set(items.map((item) => String(item || '').trim()).filter(Boolean))];
+}
+
+function StepPill({ step, current, done, label, onClick }: { step: PublishStep; current: boolean; done: boolean; label: string; onClick: () => void }) {
   return (
-    <div className={`stack-list ${tone}`}>
-      <div className="stack-head">{title}</div>
-      {items.length === 0 ? (
-        <div className="stack-empty">{emptyLabel}</div>
-      ) : (
-        items.map((item) => (
-          <div key={item} className="stack-item">
-            {item}
-          </div>
-        ))
+    <button type="button" className={`publish-step-pill${current ? ' current' : ''}${done ? ' done' : ''}`} onClick={onClick}>
+      <span className="publish-step-pill-num">{step}</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function SummaryList({ title, tone, items, emptyLabel }: { title: string; tone: 'warn' | 'ok' | 'info'; items: string[]; emptyLabel: string }) {
+  return (
+    <div className={`publish-summary-card ${tone}`}>
+      <div className="publish-summary-title">{title}</div>
+      {items.length === 0 ? <div className="publish-summary-empty">{emptyLabel}</div> : (
+        <div className="publish-summary-list">
+          {items.map((item) => <div key={`${title}-${item}`} className="publish-summary-item">• {item}</div>)}
+        </div>
       )}
     </div>
   );
 }
 
+function detectGate(developerStatus: DeveloperStatus): GateState {
+  const remoteRegistered = developerStatus.remote_key?.state === 'registered' || (developerStatus.signing_keys_registered ?? 0) > 0;
+  if (developerStatus.authorized === false) {
+    return {
+      tone: 'warn',
+      canSubmit: false,
+      message: 'Developer Mode requires a remote account with publishing enabled.',
+      actionLabel: 'Open Developer tab',
+    };
+  }
+  if (developerStatus.remote_key?.matches_local_key === false) {
+    return {
+      tone: 'warn',
+      canSubmit: false,
+      message: 'Your local signing key does not match the registered remote key. Regenerate or register the correct keypair first.',
+      actionLabel: 'Open Developer tab',
+    };
+  }
+  if (!remoteRegistered) {
+    return {
+      tone: 'warn',
+      canSubmit: false,
+      message: "No registered developer key — your package signature won't be validated. Go to Developer tab to generate and register a keypair.",
+      actionLabel: 'Set up key',
+    };
+  }
+  return {
+    tone: 'ok',
+    canSubmit: true,
+    message: 'Developer key is registered and ready for backend signature validation.',
+  };
+}
+
 export function PublishPage({
   capabilityOptions,
+  developerStatus,
   isBusy,
   onCapabilityRefresh,
   onIconSelected,
   onImagesSelected,
+  onOpenDeveloper,
   onPackageSelected,
   options,
+  packageInspection,
   packageValidation,
   publishDrag,
   publishForm,
@@ -72,12 +129,15 @@ export function PublishPage({
   onSubmit,
 }: {
   capabilityOptions: CapabilityOption[];
+  developerStatus: DeveloperStatus;
   isBusy: (key: string) => boolean;
   onCapabilityRefresh: () => void;
-  onIconSelected: (file: File | null) => void;
-  onImagesSelected: (files: FileList | File[] | null) => void;
-  onPackageSelected: (file: File | null) => void;
+  onIconSelected: (file: File | null) => void | Promise<void>;
+  onImagesSelected: (files: FileList | File[] | null) => void | Promise<void>;
+  onOpenDeveloper: () => void;
+  onPackageSelected: (file: File | null) => void | Promise<void>;
   options: Array<{ value: string; label: string; description: string }>;
+  packageInspection: PackageClientInspection | null;
   packageValidation: PackageValidationResult | null;
   publishDrag: { package: boolean; icon: boolean; images: boolean };
   publishForm: PublishForm;
@@ -85,343 +145,370 @@ export function PublishPage({
   setPublishForm: Dispatch<SetStateAction<PublishForm>>;
   onSubmit: (event: FormEvent) => Promise<void> | void;
 }) {
-  const validation = packageValidation;
-  const manifest = validation?.manifest;
+  const [step, setStep] = useState<PublishStep>(1);
+  const [pageDropActive, setPageDropActive] = useState(false);
+
+  useEffect(() => {
+    const onDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types?.includes('Files')) return;
+      event.preventDefault();
+      setPageDropActive(true);
+    };
+
+    const onDrop = (event: DragEvent) => {
+      if (!event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      setPageDropActive(false);
+      const packageFile = Array.from(event.dataTransfer.files).find((file) => file.name.toLowerCase().endsWith('.lspkg')) || null;
+      if (packageFile) {
+        setStep(1);
+        void onPackageSelected(packageFile);
+      }
+    };
+
+    const onWindowLeave = () => setPageDropActive(false);
+
+    document.addEventListener('dragover', onDragOver);
+    document.addEventListener('drop', onDrop);
+    window.addEventListener('dragleave', onWindowLeave);
+    window.addEventListener('blur', onWindowLeave);
+
+    return () => {
+      document.removeEventListener('dragover', onDragOver);
+      document.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragleave', onWindowLeave);
+      window.removeEventListener('blur', onWindowLeave);
+    };
+  }, [onPackageSelected]);
+
+  const manifest = packageValidation?.manifest || packageInspection?.manifest;
+  const gate = detectGate(developerStatus);
+  const detectedChannel = packageValidation?.detected_channel || packageInspection?.package_metadata?.distribution_channel || manifest?.declared_channel || publishForm.releaseChannel;
+  const packageWarnings = uniq([...(packageInspection?.warnings || []), ...(packageValidation?.warnings || [])]);
+  const packageErrors = uniq([...(packageInspection?.errors || []), ...(packageValidation?.errors || [])]);
+  const capabilities = uniq([...(manifest?.capabilities || []), ...(packageValidation?.capabilities || [])]);
+  const signatureStatus = packageValidation?.signature?.status || packageInspection?.signature.status || 'pending';
+  const signatureKeyId = packageValidation?.signature?.key_id || packageInspection?.signature.key_id || null;
+  const signatureAlgorithm = packageValidation?.signature?.algorithm || packageInspection?.signature.algorithm || null;
+  const developerKeyStatus = packageValidation?.signature?.developer_key_status || (gate.canSubmit ? 'registered' : 'not_registered');
+  const osSupport = manifest?.os_support || [];
+  const permissions = manifest?.permissions || [];
+  const reviewWarnings = uniq([...(packageWarnings || []), ...(packageValidation?.commercial_warnings || []), ...(packageValidation?.errors || [])]);
+
+  const packageStepReady = !!publishForm.packageFile && packageErrors.length === 0;
+  const configStepReady = packageStepReady && !!publishForm.name.trim() && !!publishForm.description.trim() && publishForm.capabilities.length > 0;
+  const canSubmit = configStepReady && gate.canSubmit && packageErrors.length === 0 && !isBusy('publish');
+
+  useEffect(() => {
+    if (!publishForm.packageFile) setStep(1);
+  }, [publishForm.packageFile]);
+
+  const submitLabel = gate.canSubmit
+    ? `Submit ${publishForm.releaseChannel === 'marketplace_release' ? 'marketplace release' : 'private beta'}`
+    : 'Submit marketplace release';
+
+  const summaryItems = useMemo(() => ([
+    { label: 'Plugin', value: `${manifest?.plugin_key || '—'} ${manifest?.version ? `v${manifest.version}` : ''}`.trim() },
+    { label: 'Channel', value: publishForm.releaseChannel },
+    { label: 'Entitlement', value: publishForm.entitlementPolicy },
+    { label: 'Signature', value: signatureStatus },
+    { label: 'Developer key', value: developerKeyStatus },
+    {
+      label: 'After submit',
+      value: publishForm.releaseChannel === 'marketplace_release'
+        ? 'in_review → deep_security_scan → admin_approval'
+        : 'private_beta_ready',
+    },
+  ]), [developerKeyStatus, manifest?.plugin_key, manifest?.version, publishForm.entitlementPolicy, publishForm.releaseChannel, signatureStatus]);
 
   return (
-    <div className="vstack">
-      <div className="ph">
-        <div>
-          <div className="ph-title">Publish pipeline</div>
-          <div className="ph-sub">Separate package inspection, release configuration and final backend validation before submit.</div>
+    <div className="vstack publish-flow-root">
+      {pageDropActive && (
+        <div className="publish-drop-overlay">
+          <div className="publish-drop-overlay-card">
+            <div className="publish-drop-overlay-title">Drop your .lspkg to publish</div>
+            <div className="publish-drop-overlay-sub">The package will be inspected client-side first and then validated by the backend.</div>
+          </div>
         </div>
-        <button className="btn btn-secondary btn-sm" disabled={isBusy('capabilities')} onClick={onCapabilityRefresh}>
-          {isBusy('capabilities') ? <Spinner /> : '⟳ Refresh capabilities'}
-        </button>
+      )}
+
+      <div className="publish-stepper">
+        <StepPill step={1} label="Package & validation" current={step === 1} done={packageStepReady} onClick={() => setStep(1)} />
+        <StepPill step={2} label="Release configuration" current={step === 2} done={configStepReady} onClick={() => setStep(packageStepReady ? 2 : 1)} />
+        <StepPill step={3} label="Review & submit" current={step === 3} done={false} onClick={() => setStep(configStepReady ? 3 : packageStepReady ? 2 : 1)} />
+      </div>
+
+      <div className={`alert ${gate.tone === 'ok' ? 'alert-success' : 'alert-warn'} publish-key-alert`}>
+        <div className="publish-key-alert-copy">{gate.message}</div>
+        {gate.actionLabel ? <button type="button" className="btn btn-secondary btn-sm" onClick={onOpenDeveloper}>{gate.actionLabel}</button> : null}
       </div>
 
       <form onSubmit={onSubmit} className="vstack">
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <div className="card-title">A. Package</div>
-              <div className="card-sub">
-                Upload the signed <span className="tbl-mono">.lspkg</span> package. Backend now validates package metadata, real image payloads and request size more strictly.
+        {step === 1 && (
+          <div className="card publish-stage-card">
+            <div className="card-head publish-stage-head">
+              <div>
+                <div className="card-title">A. Package</div>
+                <div className="card-sub">Drag the signed .lspkg anywhere on the page, or choose it here.</div>
               </div>
             </div>
-          </div>
-          <div className="card-body vstack">
-            <div className="alert alert-info">Uploads are stricter now. Client-side checks catch oversized packages, invalid images and unsupported media before the request reaches the backend.</div>
-
-            <div className="grid3-form publish-assets">
-              <FileDropZone
-                label="Package (.lspkg) *"
-                hint={publishForm.packageFile ? publishForm.packageFile.name : 'Drop a .lspkg package (max 100 MB)'}
-                accept=".lspkg"
-                dragActive={publishDrag.package}
-                hasFiles={!!publishForm.packageFile}
-                multiple={false}
-                onDragChange={(active) => setPublishDrag((state) => ({ ...state, package: active }))}
-                onFiles={(files) => onPackageSelected(files[0] ?? null)}
-              />
-              <FileDropZone
-                label="Icon (optional)"
-                hint={publishForm.iconFile ? publishForm.iconFile.name : 'PNG, JPG, WEBP or GIF · max 10 MB'}
-                accept=".png,.jpg,.jpeg,.webp,.gif"
-                dragActive={publishDrag.icon}
-                hasFiles={!!publishForm.iconFile}
-                multiple={false}
-                onDragChange={(active) => setPublishDrag((state) => ({ ...state, icon: active }))}
-                onFiles={(files) => onIconSelected(files[0] ?? null)}
-              />
-              <FileDropZone
-                label="Images (optional)"
-                hint={publishForm.imageFiles.length ? `${publishForm.imageFiles.length} image(s) selected` : 'Up to 8 PNG/JPG/WEBP/GIF images · max 12 MB each'}
-                accept=".png,.jpg,.jpeg,.webp,.gif"
-                dragActive={publishDrag.images}
-                hasFiles={publishForm.imageFiles.length > 0}
-                multiple
-                onDragChange={(active) => setPublishDrag((state) => ({ ...state, images: active }))}
-                onFiles={(files) => onImagesSelected(files)}
-              />
-            </div>
-
-            {(publishForm.packageFile || publishForm.iconFile || publishForm.imageFiles.length > 0) && (
-              <div className="publish-file-list">
-                {publishForm.packageFile && <span className="tag">package · {publishForm.packageFile.name}</span>}
-                {publishForm.iconFile && <span className="tag">icon · {publishForm.iconFile.name}</span>}
-                {publishForm.imageFiles.map((file) => (
-                  <span key={file.name + file.size} className="tag">
-                    image · {file.name}
-                  </span>
-                ))}
+            <div className="card-body vstack">
+              <div className="grid3-form publish-assets">
+                <FileDropZone
+                  label="Package (.lspkg) *"
+                  hint={publishForm.packageFile ? `${publishForm.packageFile.name}\n${(publishForm.packageFile.size / (1024 * 1024)).toFixed(1)} MB · parsed ${packageErrors.length ? 'with issues' : 'OK'}` : 'Drop a .lspkg package here, anywhere on the page, or browse.'}
+                  accept=".lspkg"
+                  dragActive={publishDrag.package}
+                  hasFiles={!!publishForm.packageFile}
+                  multiple={false}
+                  onDragChange={(active) => setPublishDrag((state) => ({ ...state, package: active }))}
+                  onFiles={(files) => void onPackageSelected(files[0] ?? null)}
+                />
+                <FileDropZone
+                  label="Icon (optional)"
+                  hint={publishForm.iconFile ? publishForm.iconFile.name : 'PNG, JPG, WEBP, GIF\nmax 10 MB'}
+                  accept=".png,.jpg,.jpeg,.webp,.gif"
+                  dragActive={publishDrag.icon}
+                  hasFiles={!!publishForm.iconFile}
+                  multiple={false}
+                  onDragChange={(active) => setPublishDrag((state) => ({ ...state, icon: active }))}
+                  onFiles={(files) => void onIconSelected(files[0] ?? null)}
+                />
+                <FileDropZone
+                  label="Images (optional)"
+                  hint={publishForm.imageFiles.length ? `${publishForm.imageFiles.length} image(s) selected` : 'Up to 8 images\nmax 12 MB each'}
+                  accept=".png,.jpg,.jpeg,.webp,.gif"
+                  dragActive={publishDrag.images}
+                  hasFiles={publishForm.imageFiles.length > 0}
+                  multiple
+                  onDragChange={(active) => setPublishDrag((state) => ({ ...state, images: active }))}
+                  onFiles={(files) => void onImagesSelected(files)}
+                />
               </div>
-            )}
 
-            <div className="validation-grid">
-              <div className="validation-card">
-                <div className="validation-title">Manifest detected</div>
-                <div className="drow">
-                  <span className="dkey">Display name</span>
-                  <span className="dval">{manifest?.display_name || 'Waiting for backend validation'}</span>
+              <div className="validation-grid publish-top-grid">
+                <div className="validation-card">
+                  <div className="validation-title">Manifest detected (client-side)</div>
+                  <div className="drow"><span className="dkey">plugin_key</span><span className="dval-mono">{manifest?.plugin_key || '—'}</span></div>
+                  <div className="drow"><span className="dkey">version</span><span className="dval-mono">{manifest?.version || '—'}</span></div>
+                  <div className="drow"><span className="dkey">display_name</span><span className="dval">{manifest?.display_name || '—'}</span></div>
+                  <div className="drow"><span className="dkey">publisher</span><span className="dval">{developerStatus.publisher?.display_name || developerStatus.publisher?.slug || '—'}</span></div>
+                  <div className="drow"><span className="dkey">flows</span><div className="publish-file-list">{capabilities.length ? capabilities.map((capability) => <span key={capability} className="tag">{capability}</span>) : <span className="tag tag-soft">—</span>}</div></div>
+                  <div className="drow"><span className="dkey">os_support</span><div className="publish-file-list">{osSupport.length ? osSupport.map((item) => <span key={item} className="tag">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
+                  <div className="drow"><span className="dkey">permissions</span><div className="publish-file-list">{permissions.length ? permissions.map((item) => <span key={item} className="tag tag-soft">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                 </div>
-                <div className="drow">
-                  <span className="dkey">Plugin key</span>
-                  <span className="dval-mono">{validation?.plugin_key || manifest?.plugin_key || '—'}</span>
-                </div>
-                <div className="drow">
-                  <span className="dkey">Version</span>
-                  <span className="dval">{manifest?.version || '—'}</span>
-                </div>
-                <div className="drow">
-                  <span className="dkey">Declared channel</span>
-                  <Badge value={manifest?.declared_channel || validation?.detected_channel} />
-                </div>
-                <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
-                  <label className="field-label">Capabilities</label>
-                  <div className="publish-file-list">
-                    {(manifest?.capabilities || validation?.capabilities || []).length > 0 ? (
-                      (manifest?.capabilities || validation?.capabilities || []).map((capability) => (
-                        <span key={capability} className="tag">
-                          {capability}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="tag tag-soft">Not exposed yet</span>
-                    )}
+
+                <div className="validation-card">
+                  <div className="validation-title">Signature & backend validation</div>
+                  <div className="drow"><span className="dkey">signature</span><Badge value={signatureStatus} /></div>
+                  <div className="drow"><span className="dkey">key_id</span><span className="dval-mono">{signatureKeyId || '—'}</span></div>
+                  <div className="drow"><span className="dkey">algorithm</span><span className="dval">{signatureAlgorithm || '—'}</span></div>
+                  <div className="drow"><span className="dkey">dev key status</span><Badge value={developerKeyStatus} /></div>
+                  <div className="drow"><span className="dkey">detected channel</span><Badge value={detectedChannel} /></div>
+                  <div className="drow"><span className="dkey">security scan</span><Badge value={packageValidation?.security_scan_status || (packageWarnings.length ? 'warning' : 'pending')} /></div>
+                  <div className="publish-inline-notes">
+                    {packageWarnings.map((warning) => <div key={warning} className="publish-inline-note warn">• {warning}</div>)}
+                    {packageErrors.map((error) => <div key={error} className="publish-inline-note err">• {error}</div>)}
                   </div>
                 </div>
               </div>
 
-              <div className="validation-card">
-                <div className="validation-title">Signature</div>
-                <div className="drow">
-                  <span className="dkey">Status</span>
-                  <Badge value={validation?.signature?.status || 'pending'} />
-                </div>
-                <div className="drow">
-                  <span className="dkey">Key ID</span>
-                  <span className="dval-mono">{validation?.signature?.key_id || '—'}</span>
-                </div>
-                <div className="drow">
-                  <span className="dkey">Algorithm</span>
-                  <span className="dval">{validation?.signature?.algorithm || '—'}</span>
-                </div>
-                <div className="drow">
-                  <span className="dkey">Developer key status</span>
-                  <Badge value={validation?.signature?.developer_key_status} />
-                </div>
-                <div className="drow">
-                  <span className="dkey">Detected channel</span>
-                  <Badge value={validation?.detected_channel || 'local_dev'} />
-                </div>
-                {validation?.summary && <div className="helper-note">{validation.summary}</div>}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <div className="card-title">B. Release configuration</div>
-              <div className="card-sub">Choose the release channel, entitlement policy and marketplace metadata. Local dev installs remain Desktop-only and are not published here.</div>
-            </div>
-          </div>
-          <div className="card-body vstack">
-            <div className="channel-grid">
-              {options.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`channel-card${publishForm.releaseChannel === option.value ? ' selected' : ''}`}
-                  onClick={() => setPublishForm((current) => ({ ...current, releaseChannel: option.value }))}
-                >
-                  <div className="channel-card-head">
-                    <Badge value={option.value} />
-                  </div>
-                  <div className="channel-card-title">{option.label}</div>
-                  <div className="channel-card-sub">{option.description}</div>
+              <div className="publish-stage-actions">
+                <button type="button" className="btn btn-secondary" onClick={onCapabilityRefresh} disabled={isBusy('capabilities') || isBusy('package-validate')}>
+                  {isBusy('package-validate') || isBusy('capabilities') ? <Spinner /> : 'Refresh package status'}
                 </button>
-              ))}
-            </div>
-
-            <div className="field" style={{ margin: 0 }}>
-              <label className="field-label">Entitlement policy</label>
-              <div className="channel-grid">
-                {entitlementOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`channel-card${publishForm.entitlementPolicy === option.value ? ' selected' : ''}`}
-                    onClick={() =>
-                      setPublishForm((current) => ({
-                        ...current,
-                        entitlementPolicy: option.value,
-                        offlineGraceDays: option.value === 'free' ? 30 : current.offlineGraceDays,
-                      }))
-                    }
-                  >
-                    <div className="channel-card-head">
-                      <Badge value={option.value} />
-                    </div>
-                    <div className="channel-card-title">{option.label}</div>
-                    <div className="channel-card-sub">{option.description}</div>
-                  </button>
-                ))}
+                <button type="button" className="btn btn-primary" disabled={!packageStepReady} onClick={() => setStep(2)}>
+                  Continue to release config →
+                </button>
               </div>
-              <span className="field-hint">This value is sent to the backend as <span className="tbl-mono">entitlement_policy</span>.</span>
             </div>
+          </div>
+        )}
 
-            {publishForm.entitlementPolicy !== 'free' && (
+        {step === 2 && (
+          <div className="card publish-stage-card">
+            <div className="card-head publish-stage-head">
+              <div>
+                <div className="card-title">B. Release configuration</div>
+                <div className="card-sub">Fields preloaded from the manifest remain editable where safe.</div>
+              </div>
+            </div>
+            <div className="card-body vstack">
               <div className="field" style={{ margin: 0 }}>
-                <label className="field-label">Grace period offline</label>
-                <select
-                  className="select"
-                  value={String(publishForm.offlineGraceDays)}
-                  onChange={(event) =>
-                    setPublishForm((current) => ({
-                      ...current,
-                      offlineGraceDays: Number(event.target.value) || 30,
-                    }))
-                  }
-                >
-                  {graceOptions.map((days) => (
-                    <option key={days} value={days}>
-                      {days} days
-                    </option>
+                <label className="field-label">Distribution channel</label>
+                <div className="channel-grid">
+                  {options.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`channel-card${publishForm.releaseChannel === option.value ? ' selected' : ''}`}
+                      onClick={() => setPublishForm((current) => ({ ...current, releaseChannel: option.value }))}
+                    >
+                      <div className="channel-card-head"><Badge value={option.value} /></div>
+                      <div className="channel-card-title">{option.label}</div>
+                      <div className="channel-card-sub">{option.description}</div>
+                    </button>
                   ))}
-                </select>
-                <span className="field-hint">Days that the plugin can keep working offline after a subscription or entitlement check expires.</span>
+                </div>
               </div>
-            )}
 
-            <div className="grid2-form">
               <div className="field" style={{ margin: 0 }}>
-                <label className="field-label">Display name *</label>
-                <input
-                  className="input"
-                  required
-                  value={publishForm.name}
-                  onChange={(event) => setPublishForm((current) => ({ ...current, name: event.target.value }))}
-                  placeholder="My Plugin"
-                />
-                <span className="field-hint">Plugin key is read from the package manifest. It is intentionally not editable here.</span>
+                <label className="field-label">Entitlement policy</label>
+                <div className="channel-grid">
+                  {entitlementOptions.map((option, index) => (
+                    <button
+                      key={`${option.value}-${index}`}
+                      type="button"
+                      disabled={option.disabled}
+                      className={`channel-card${publishForm.entitlementPolicy === option.value ? ' selected' : ''}${option.disabled ? ' disabled' : ''}`}
+                      onClick={() => option.disabled ? undefined : setPublishForm((current) => ({ ...current, entitlementPolicy: option.value }))}
+                    >
+                      <div className="channel-card-head"><Badge value={option.disabled ? 'coming soon' : option.value} /></div>
+                      <div className="channel-card-title">{option.label}</div>
+                      <div className="channel-card-sub">{option.description}</div>
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="field" style={{ margin: 0 }}>
-                <label className="field-label">Capabilities</label>
-                <CapabilityMultiSelect
-                  options={capabilityOptions}
-                  value={publishForm.capabilities}
-                  onChange={(next) => setPublishForm((current) => ({ ...current, capabilities: next }))}
-                  loading={isBusy('capabilities')}
+
+              <div className="grid2-form publish-readonly-grid">
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Plugin key</label>
+                  <input className="input mono-text" value={manifest?.plugin_key || ''} readOnly placeholder="Read only from manifest" />
+                  <span className="field-hint">Pulled from the manifest to preserve namespace integrity.</span>
+                </div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Version</label>
+                  <input className="input mono-text" value={manifest?.version || ''} readOnly placeholder="Read only from manifest" />
+                  <span className="field-hint">Version only changes when the package is rebuilt.</span>
+                </div>
+              </div>
+
+              <div className="grid2-form">
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Display name *</label>
+                  <input
+                    className="input"
+                    required
+                    value={publishForm.name}
+                    onChange={(event) => setPublishForm((current) => ({ ...current, name: event.target.value }))}
+                    placeholder="Image Enhancer Pro"
+                  />
+                  <span className="field-hint">Preloaded from manifest.display_name. Editable.</span>
+                </div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Capabilities</label>
+                  <CapabilityMultiSelect
+                    options={capabilityOptions}
+                    value={publishForm.capabilities}
+                    onChange={(next) => setPublishForm((current) => ({ ...current, capabilities: next }))}
+                    loading={isBusy('capabilities')}
+                  />
+                  <span className="field-hint">Preloaded from flows[].primary_capability.</span>
+                </div>
+              </div>
+
+              <div className="field">
+                <label className="field-label">Description *</label>
+                <textarea
+                  className="textarea"
+                  rows={4}
+                  value={publishForm.description}
+                  onChange={(event) => setPublishForm((current) => ({ ...current, description: event.target.value }))}
+                  placeholder="Enhances and upscales images using a local diffusion backend."
                 />
               </div>
-            </div>
 
-            <div className="field">
-              <label className="field-label">Description</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                value={publishForm.description}
-                onChange={(event) => setPublishForm((current) => ({ ...current, description: event.target.value }))}
-                placeholder="What does this plugin do?"
-              />
-            </div>
+              <div className="grid2-form">
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Tags</label>
+                  <input className="input" value={publishForm.tags} onChange={(event) => setPublishForm((current) => ({ ...current, tags: event.target.value }))} placeholder="image, enhancement, sdxl" />
+                </div>
+                <div className="field" style={{ margin: 0 }}>
+                  <label className="field-label">Categories</label>
+                  <input className="input" value={publishForm.categories} onChange={(event) => setPublishForm((current) => ({ ...current, categories: event.target.value }))} placeholder="generation, editing" />
+                </div>
+              </div>
 
-            <div className="grid2-form">
-              <div className="field" style={{ margin: 0 }}>
-                <label className="field-label">Tags</label>
-                <input
-                  className="input"
-                  value={publishForm.tags}
-                  onChange={(event) => setPublishForm((current) => ({ ...current, tags: event.target.value }))}
-                  placeholder="audio, transcribe"
+              <div className="field">
+                <label className="field-label">YouTube links (optional)</label>
+                <textarea
+                  className="textarea"
+                  rows={3}
+                  value={publishForm.videoLinks}
+                  onChange={(event) => setPublishForm((current) => ({ ...current, videoLinks: event.target.value }))}
+                  placeholder={'https://www.youtube.com/watch?v=...\nOne per line. HTTPS YouTube only.'}
                 />
               </div>
-              <div className="field" style={{ margin: 0 }}>
-                <label className="field-label">Categories</label>
-                <input
-                  className="input"
-                  value={publishForm.categories}
-                  onChange={(event) => setPublishForm((current) => ({ ...current, categories: event.target.value }))}
-                  placeholder="speech, media"
+
+              <div className="field">
+                <label className="field-label">Release notes</label>
+                <textarea
+                  className="textarea"
+                  rows={3}
+                  value={publishForm.changelog}
+                  onChange={(event) => setPublishForm((current) => ({ ...current, changelog: event.target.value }))}
+                  placeholder="What changed in this release?"
                 />
               </div>
-            </div>
 
-            <div className="field">
-              <label className="field-label">YouTube links</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                value={publishForm.videoLinks}
-                onChange={(event) => setPublishForm((current) => ({ ...current, videoLinks: event.target.value }))}
-                placeholder={'One per line or comma separated\nhttps://www.youtube.com/watch?v=...'}
-              />
-              <span className="field-hint">Only HTTPS links from YouTube are accepted.</span>
-            </div>
-
-            <div className="field">
-              <label className="field-label">Release notes</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                value={publishForm.changelog}
-                onChange={(event) => setPublishForm((current) => ({ ...current, changelog: event.target.value }))}
-                placeholder="What changed in this release?"
-              />
+              <div className="publish-stage-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setStep(1)}>← Back</button>
+                <button type="button" className="btn btn-primary" disabled={!configStepReady} onClick={() => setStep(3)}>Continue to review →</button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <div className="card-title">C. Validation & submit</div>
-              <div className="card-sub">Review conflicts, policy warnings, signature state and commercial posture before submit.</div>
+        {step === 3 && (
+          <div className="card publish-stage-card">
+            <div className="card-head publish-stage-head">
+              <div>
+                <div className="card-title">C. Review & submit</div>
+                <div className="card-sub">Review warnings, signature state and policy posture before sending the release.</div>
+              </div>
             </div>
-          </div>
-          <div className="card-body vstack">
-            <div className="validation-list-grid">
-              <ValidationList title="Warnings" tone="info" items={validation?.warnings || []} emptyLabel="No warnings reported" />
-              <ValidationList title="Conflicts" tone="warn" items={validation?.conflicts || []} emptyLabel="No conflicts reported" />
-              <ValidationList title="Policy warnings" tone="warn" items={validation?.policy_warnings || []} emptyLabel="No policy warnings" />
-              <ValidationList title="Commercial warnings" tone="warn" items={validation?.commercial_warnings || []} emptyLabel="No commercial warnings" />
-              <ValidationList title="Errors" tone="err" items={validation?.errors || []} emptyLabel="No blocking errors" />
-            </div>
+            <div className="card-body vstack">
+              <div className="publish-review-grid">
+                {reviewColumns.map((column) => {
+                  const items = column.key === 'warnings'
+                    ? reviewWarnings
+                    : uniq([...(packageValidation?.[column.key] || []) as string[]]);
+                  return (
+                    <SummaryList
+                      key={column.key}
+                      title={column.label}
+                      tone={column.tone}
+                      items={items}
+                      emptyLabel={column.key === 'conflicts' ? 'No conflicts detected' : column.key === 'policy_warnings' ? 'marketplace_release allowed' : 'No warnings detected'}
+                    />
+                  );
+                })}
+              </div>
 
-            {((validation?.install_policy_badges?.length || 0) > 0 || validation?.release_channel || validation?.entitlement_policy) && (
-              <div className="publish-file-list">
-                {validation?.release_channel && <span className="tag tag-soft">submit channel · {validation.release_channel}</span>}
-                {(validation?.entitlement_policy || publishForm.entitlementPolicy) && (
-                  <span className="tag tag-soft">entitlement · {validation?.entitlement_policy || publishForm.entitlementPolicy}</span>
-                )}
-                {publishForm.entitlementPolicy !== 'free' && <span className="tag tag-soft">offline grace · {publishForm.offlineGraceDays} days</span>}
-                {(validation?.install_policy_badges || []).map((badge) => (
-                  <span key={badge} className="tag tag-soft">
-                    {badge}
-                  </span>
+              <div className="validation-card publish-submit-summary">
+                <div className="validation-title">Submit summary</div>
+                {summaryItems.map((item) => (
+                  <div key={item.label} className="drow">
+                    <span className="dkey">{item.label}</span>
+                    <span className="dval">{item.value}</span>
+                  </div>
                 ))}
               </div>
-            )}
 
-            <div className="alert alert-info">
-              Security is enforced by backend contracts. This UI does not store private keys, does not perform local installs, does not expose internal storage paths and does not replace backend signature, namespace or entitlement checks.
+              <div className="alert alert-info">
+                The backend does not store private keys, does not access local filesystem paths and does not replace backend checks for signature, namespace and entitlement.
+              </div>
+
+              <div className="publish-stage-actions publish-submit-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setStep(2)}>← Back to configuration</button>
+                <button className="btn btn-primary btn-full" type="submit" disabled={!canSubmit}>
+                  {isBusy('publish') ? <><Spinner /> Publishing…</> : `${submitLabel}${gate.canSubmit ? '' : ' (register a dev key to enable)'}`}
+                </button>
+              </div>
             </div>
-
-            <button className="btn btn-primary btn-full" type="submit" disabled={isBusy('publish') || !publishForm.packageFile || (validation?.errors.length || 0) > 0}>
-              {isBusy('publish') ? (
-                <>
-                  <Spinner /> Publishing…
-                </>
-              ) : (
-                `Submit ${publishForm.releaseChannel === 'marketplace_release' ? 'marketplace release' : 'private beta'}`
-              )}
-            </button>
           </div>
-        </div>
+        )}
       </form>
     </div>
   );
