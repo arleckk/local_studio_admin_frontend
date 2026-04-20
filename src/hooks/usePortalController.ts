@@ -36,6 +36,7 @@ import {
   enrichPlugin,
   exportCsv,
   isAllowedYoutubeUrl,
+  canonicalizeCapabilityValues,
   normalizeCapabilityOptions,
   validateIconFile,
   validateImageFiles,
@@ -162,7 +163,7 @@ export function usePortalController() {
     const id = ++toastId.current;
     setToasts((current) => [...current, { id, kind, msg }]);
     window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4200);
-  }, []);
+  }, [capabilityOptions]);
 
   const isBusy = useCallback((key: string) => !!busy[key], [busy]);
 
@@ -331,10 +332,11 @@ export function usePortalController() {
   const refreshCapabilities = useCallback(async () => {
     const payload = await run('capabilities', async () => {
       const candidates = [
+        '/api/v1/publishers/capabilities',
         '/api/v1/market/capabilities',
         '/api/v1/capabilities',
-        '/api/v1/publishers/capabilities',
         '/api/v1/metadata/capabilities',
+        ...(isAdmin ? ['/api/v1/admin/capabilities'] : []),
       ];
       for (const path of candidates) {
         try {
@@ -346,7 +348,7 @@ export function usePortalController() {
       return [];
     });
     if (payload) setCapabilityOptions(normalizeCapabilityOptions(payload));
-  }, [auth]);
+  }, [auth, isAdmin]);
 
   const loadDashboard = useCallback(async () => {
     if (!isAdmin || !accessToken) return;
@@ -486,7 +488,10 @@ export function usePortalController() {
       ...validation,
       manifest: validation.manifest || inspection.manifest,
       plugin_key: validation.plugin_key || inspection.manifest?.plugin_key || null,
-      capabilities: (validation.capabilities?.length ? validation.capabilities : inspection.manifest?.capabilities) || [],
+      capabilities: canonicalizeCapabilityValues(
+        (validation.capabilities?.length ? validation.capabilities : inspection.manifest?.capabilities) || [],
+        capabilityOptions,
+      ),
       detected_channel: detectedChannel,
       signature:
         validation.signature?.status && validation.signature.status !== 'pending'
@@ -500,7 +505,7 @@ export function usePortalController() {
       warnings: [...new Set([...(inspection.warnings || []), ...(validation.warnings || [])])],
       errors: [...new Set([...(inspection.errors || []), ...(validation.errors || [])])],
     };
-  }, []);
+  }, [capabilityOptions]);
 
   const validateSelectedPackage = useCallback(async (
     file: File | null,
@@ -545,6 +550,16 @@ export function usePortalController() {
       if (plugin?.latest_release) setReleaseKey(plugin.latest_release.release_id);
     }
   }, [myPlugins, selectedMyPluginKey]);
+
+
+  useEffect(() => {
+    if (!capabilityOptions.length) return;
+    setPublishForm((current) => {
+      const normalized = canonicalizeCapabilityValues(current.capabilities, capabilityOptions);
+      if (normalized.join('|') === current.capabilities.join('|')) return current;
+      return { ...current, capabilities: normalized };
+    });
+  }, [capabilityOptions, setPublishForm]);
 
   const handleLogin = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -689,7 +704,7 @@ export function usePortalController() {
       description: inspection.manifest?.description || '',
       tags: (inspection.manifest?.tags || []).join(', '),
       categories: (inspection.manifest?.categories || []).join(', '),
-      capabilities: inspection.manifest?.capabilities || [],
+      capabilities: canonicalizeCapabilityValues(inspection.manifest?.capabilities || [], capabilityOptions),
       releaseChannel: derivedChannel === 'private_beta' ? 'private_beta' : 'marketplace_release',
     }));
 
@@ -700,7 +715,7 @@ export function usePortalController() {
     }
 
     await validateSelectedPackage(file, derivedChannel, inspection);
-  }, [mergeValidationWithInspection, toast, validateSelectedPackage]);
+  }, [capabilityOptions, mergeValidationWithInspection, toast, validateSelectedPackage]);
 
   const onIconSelected = useCallback(async (file: File | null) => {
     const error = validateIconFile(file);

@@ -136,11 +136,46 @@ export function normalizeCapabilityOptions(payload: unknown): CapabilityOption[]
       const value = String(obj.key ?? obj.code ?? obj.slug ?? obj.value ?? obj.id ?? '').trim();
       const label = String(obj.label ?? obj.display_name ?? obj.name ?? obj.title ?? value).trim();
       const description = obj.description ? String(obj.description) : undefined;
+      const aliases = Array.isArray(obj.aliases)
+        ? obj.aliases.map((item) => String(item ?? '').trim()).filter(Boolean)
+        : undefined;
       if (!value) return null;
-      return { value, label: label || value, description } satisfies CapabilityOption;
+      return { value, label: label || value, description, aliases } satisfies CapabilityOption;
     })
     .filter((entry): entry is CapabilityOption => !!entry)
     .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function normalizeCapabilityToken(value: string | null | undefined) {
+  return String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+}
+
+export function canonicalizeCapabilityValues(values: string[] | null | undefined, options: CapabilityOption[]): string[] {
+  const source = Array.isArray(values) ? values : [];
+  if (!source.length) return [];
+  if (!options.length) return [...new Set(source.map((item) => String(item || '').trim()).filter(Boolean))];
+
+  const aliasMap = new Map<string, string>();
+  for (const option of options) {
+    const tokens = [option.value, option.label, ...(option.aliases || [])];
+    for (const token of tokens) {
+      const normalized = normalizeCapabilityToken(token);
+      if (!normalized || aliasMap.has(normalized)) continue;
+      aliasMap.set(normalized, option.value);
+    }
+  }
+
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const item of source) {
+    const raw = String(item || '').trim();
+    if (!raw) continue;
+    const canonical = aliasMap.get(normalizeCapabilityToken(raw)) || raw;
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    resolved.push(canonical);
+  }
+  return resolved;
 }
 
 export function getLatestRelease(releases: PublisherRelease[]) {

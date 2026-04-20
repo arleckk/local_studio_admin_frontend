@@ -161,6 +161,7 @@ export type CapabilityOption = {
   value: string;
   label: string;
   description?: string;
+  aliases?: string[];
 };
 
 export type DeveloperKey = {
