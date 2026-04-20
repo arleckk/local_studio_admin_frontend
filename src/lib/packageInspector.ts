@@ -1,33 +1,5 @@
-export type PackageInspectionManifest = {
-  plugin_key: string | null;
-  display_name: string | null;
-  version: string | null;
-  description: string | null;
-  capabilities: string[];
-  tags: string[];
-  categories: string[];
-  declared_channel: string | null;
-  os_support: string[];
-  permissions: string[];
-};
-
-export type PackageInspectionSignature = {
-  status: 'signed' | 'unsigned' | 'invalid';
-  key_id: string | null;
-  algorithm: string | null;
-};
-
-export type PackageInspectionPackageMetadata = {
-  distribution_channel: string | null;
-};
-
-export type PackageClientInspection = {
-  manifest: PackageInspectionManifest | null;
-  package_metadata: PackageInspectionPackageMetadata | null;
-  signature: PackageInspectionSignature;
-  warnings: string[];
-  errors: string[];
-};
+import type { PackageClientInspection } from './types';
+import { normalizeManifestSummary } from './pluginManifest';
 
 const textDecoder = new TextDecoder('utf-8');
 const EOCD_SIGNATURE = 0x06054b50;
@@ -47,11 +19,6 @@ function bytesToString(bytes: Uint8Array) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-}
-
-function asStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item ?? '').trim()).filter(Boolean);
 }
 
 function hasPrefix(bytes: Uint8Array, signature: number[]) {
@@ -151,33 +118,6 @@ function parseJson(text: string | null) {
   }
 }
 
-function collectCapabilities(manifest: Record<string, unknown>) {
-  return asStringList(manifest.capabilities);
-}
-
-function collectOsSupport(manifest: Record<string, unknown>, packageMetadata: Record<string, unknown>) {
-  const compatibility = asRecord(manifest.compatibility);
-  return [...new Set([
-    ...asStringList(manifest.os_support),
-    ...asStringList(compatibility.os_support),
-    ...asStringList(packageMetadata.os_support),
-  ])];
-}
-
-function collectPermissions(manifest: Record<string, unknown>) {
-  const permissions = manifest.permissions;
-  if (Array.isArray(permissions)) {
-    return permissions
-      .map((item) => {
-        if (typeof item === 'string') return item.trim();
-        const obj = asRecord(item);
-        return String(obj.permission ?? obj.key ?? obj.name ?? '').trim();
-      })
-      .filter(Boolean);
-  }
-  return [];
-}
-
 export async function readFileBytes(file: File) {
   return new Uint8Array(await file.arrayBuffer());
 }
@@ -242,7 +182,7 @@ export async function inspectLspkgFile(file: File): Promise<PackageClientInspect
   if (!Object.keys(manifestRecord).length) errors.push('manifest.json was not found or could not be parsed.');
   if (!Object.keys(packageMetadataRecord).length) warnings.push('package-metadata.json was not found or could not be parsed.');
 
-  const signatureStatus: PackageInspectionSignature['status'] = !signatureJson
+  const signatureStatus: PackageClientInspection['signature']['status'] = !signatureJson
     ? 'unsigned'
     : Object.keys(signatureRecord).length
       ? 'signed'
@@ -252,27 +192,12 @@ export async function inspectLspkgFile(file: File): Promise<PackageClientInspect
   if (signatureStatus === 'invalid') errors.push('signature.json exists but could not be parsed.');
 
   const manifest = Object.keys(manifestRecord).length
-    ? {
-        plugin_key: typeof manifestRecord.plugin_key === 'string' ? manifestRecord.plugin_key : null,
-        display_name: typeof manifestRecord.display_name === 'string' ? manifestRecord.display_name : null,
-        version: typeof manifestRecord.version === 'string' ? manifestRecord.version : null,
-        description: typeof manifestRecord.description === 'string' ? manifestRecord.description : null,
-        capabilities: collectCapabilities(manifestRecord),
-        tags: asStringList(manifestRecord.tags ?? manifestRecord.keywords),
-        categories: asStringList(manifestRecord.categories),
-        declared_channel:
-          typeof manifestRecord.declared_channel === 'string'
-            ? manifestRecord.declared_channel
-            : typeof packageMetadataRecord.distribution_channel === 'string'
-              ? packageMetadataRecord.distribution_channel
-              : null,
-        os_support: collectOsSupport(manifestRecord, packageMetadataRecord),
-        permissions: collectPermissions(manifestRecord),
-      }
+    ? normalizeManifestSummary(manifestRecord, packageMetadataRecord)
     : null;
 
   if (manifest && !manifest.plugin_key) errors.push('manifest.json is missing plugin_key.');
   if (manifest && !manifest.version) errors.push('manifest.json is missing version.');
+  if (manifest?.manifest_consistency_warnings.length) warnings.push(...manifest.manifest_consistency_warnings);
 
   return {
     manifest,
@@ -286,7 +211,7 @@ export async function inspectLspkgFile(file: File): Promise<PackageClientInspect
       : null,
     signature: {
       status: signatureStatus,
-      key_id: typeof signatureRecord.key_id === 'string' ? signatureRecord.key_id : null,
+      key_id: typeof signatureRecord.key_id === 'string' ? signatureRecord.key_id : typeof signatureRecord.public_key_id === 'string' ? signatureRecord.public_key_id : null,
       algorithm: typeof signatureRecord.algorithm === 'string' ? signatureRecord.algorithm : null,
     },
     warnings,

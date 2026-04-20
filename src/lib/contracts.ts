@@ -8,6 +8,7 @@ import type {
   PublisherRelease,
 } from './types';
 import { buildFallbackPackageValidation, deriveDeveloperFallback } from './utils';
+import { normalizeManifestSummary } from './pluginManifest';
 
 export type AuthOpts = {
   token?: string;
@@ -164,26 +165,7 @@ export function normalizeDeveloperKeys(payload: unknown): DeveloperKey[] {
 }
 
 export function normalizeManifest(entry: unknown): PackageManifestSummary | null {
-  const obj = asRecord(entry);
-  if (!Object.keys(obj).length) return null;
-  return {
-    plugin_key: typeof obj.plugin_key === 'string' ? obj.plugin_key : typeof obj.id === 'string' ? obj.id : null,
-    display_name: typeof obj.display_name === 'string' ? obj.display_name : typeof obj.name === 'string' ? obj.name : null,
-    version: typeof obj.version === 'string' ? obj.version : typeof obj.plugin_version === 'string' ? obj.plugin_version : null,
-    description: typeof obj.description === 'string' ? obj.description : null,
-    capabilities: asStringList(obj.capabilities),
-    tags: asStringList(obj.tags ?? obj.keywords),
-    categories: asStringList(obj.categories),
-    declared_channel:
-      typeof obj.declared_channel === 'string'
-        ? obj.declared_channel
-        : typeof obj.channel === 'string'
-          ? obj.channel
-          : null,
-    manifest_version: typeof obj.manifest_version === 'string' ? obj.manifest_version : null,
-    os_support: asStringList(obj.os_support ?? asRecord(obj.compatibility).os_support),
-    permissions: asStringList(obj.permissions),
-  };
+  return normalizeManifestSummary(entry);
 }
 
 export function normalizePackageValidation(payload: unknown, file: File, releaseChannel: string): PackageValidationResult {
@@ -192,18 +174,19 @@ export function normalizePackageValidation(payload: unknown, file: File, release
   if (!Object.keys(obj).length) return fallback;
   const signature = asRecord(obj.signature ?? obj.signature_summary ?? obj.developer_signature);
   const securityScan = asRecord(obj.security_scan ?? obj.security_scan_summary);
+  const manifest = normalizeManifest(obj.manifest ?? obj.detected_manifest);
 
   return {
     source: 'backend',
     package_status: typeof obj.package_status === 'string' ? obj.package_status : typeof obj.status === 'string' ? obj.status : fallback.package_status,
-    manifest: normalizeManifest(obj.manifest ?? obj.detected_manifest),
+    manifest,
     plugin_key:
       typeof obj.plugin_key === 'string'
         ? obj.plugin_key
         : typeof obj.detected_plugin_key === 'string'
           ? obj.detected_plugin_key
           : fallback.plugin_key,
-    capabilities: asStringList(obj.capabilities ?? obj.detected_capabilities ?? obj.requested_capabilities),
+    capabilities: asStringList(obj.capabilities ?? obj.detected_capabilities ?? obj.requested_capabilities ?? manifest?.capabilities),
     detected_channel:
       typeof obj.detected_channel === 'string'
         ? obj.detected_channel
@@ -255,11 +238,14 @@ export function normalizePlugins(payload: unknown): PublisherPlugin[] {
     const pluginKey = String(obj.plugin_key ?? obj.key ?? '').trim();
     const pluginId = String(obj.id ?? pluginKey ?? '').trim();
     if (!pluginId || !pluginKey) continue;
+    const manifest = normalizeManifestSummary(
+      obj.manifest ?? obj.public_manifest ?? obj.latest_manifest ?? (Array.isArray(obj.operations) || Array.isArray(obj.flows) || Array.isArray(obj.providers) ? obj : null),
+    );
     items.push({
       id: pluginId,
       plugin_key: pluginKey,
-      display_name: String(obj.display_name ?? obj.name ?? pluginKey),
-      description: typeof obj.description === 'string' ? obj.description : null,
+      display_name: String(obj.display_name ?? obj.name ?? manifest?.display_name ?? pluginKey),
+      description: typeof obj.description === 'string' ? obj.description : manifest?.description ?? null,
       publisher_slug: String(obj.publisher_slug ?? obj.publisher ?? 'unknown'),
       publisher: typeof obj.publisher === 'string' ? obj.publisher : null,
       trust_level: String(obj.trust_level ?? obj.plugin_type ?? 'community'),
@@ -268,9 +254,14 @@ export function normalizePlugins(payload: unknown): PublisherPlugin[] {
       status: typeof obj.status === 'string' ? obj.status : null,
       deactivated_at: typeof obj.deactivated_at === 'string' ? obj.deactivated_at : null,
       deactivation_reason: typeof obj.deactivation_reason === 'string' ? obj.deactivation_reason : null,
-      tags: asStringList(obj.tags),
-      categories: asStringList(obj.categories),
-      capabilities: asStringList(obj.capabilities),
+      tags: asStringList(obj.tags ?? manifest?.tags),
+      categories: asStringList(obj.categories ?? manifest?.categories),
+      capabilities: asStringList(obj.capabilities ?? manifest?.capabilities),
+      operations: manifest?.operations ?? [],
+      providers: manifest?.providers ?? [],
+      operation_count: manifest?.operation_count,
+      provider_count: manifest?.provider_count,
+      manifest,
       internal: typeof obj.internal === 'boolean' ? obj.internal : undefined,
       bundled: typeof obj.bundled === 'boolean' ? obj.bundled : undefined,
       homepage_url: typeof obj.homepage_url === 'string' ? obj.homepage_url : null,

@@ -70,6 +70,11 @@ export type PublisherPlugin = {
   tags: string[];
   categories: string[];
   capabilities: string[];
+  operations: PackageOperationSummary[];
+  providers: PackageProviderSummary[];
+  operation_count?: number;
+  provider_count?: number;
+  manifest?: PackageManifestSummary | null;
   internal?: boolean;
   bundled?: boolean;
   homepage_url?: string | null;
@@ -215,18 +220,48 @@ export type DeveloperStatus = {
   notes: string[];
 };
 
+export type PackageOperationSummary = {
+  operation_key: string;
+  workflow_key?: string | null;
+  capability_key?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  default_provider_key?: string | null;
+  default_model_key?: string | null;
+  suggested_model_keys: string[];
+  accepted_model_families: string[];
+  allow_user_model_override?: boolean | null;
+  allow_cross_plugin_models?: boolean | null;
+};
+
+export type PackageProviderSummary = {
+  provider_key: string;
+  display_name?: string | null;
+  runtime_family?: string | null;
+  operation_keys: string[];
+  default_for_operations: string[];
+  supported_model_families: string[];
+  requested_permissions: string[];
+  side_engine_key?: string | null;
+};
+
 export type PackageManifestSummary = {
   plugin_key?: string | null;
   display_name?: string | null;
   version?: string | null;
   description?: string | null;
-  capabilities?: string[];
-  tags?: string[];
-  categories?: string[];
+  capabilities: string[];
+  tags: string[];
+  categories: string[];
   declared_channel?: string | null;
   manifest_version?: string | null;
-  os_support?: string[];
-  permissions?: string[];
+  os_support: string[];
+  permissions: string[];
+  operations: PackageOperationSummary[];
+  providers: PackageProviderSummary[];
+  operation_count: number;
+  provider_count: number;
+  manifest_consistency_warnings: string[];
 };
 
 export type PackageSignatureSummary = {

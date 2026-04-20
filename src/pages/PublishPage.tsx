@@ -7,6 +7,9 @@ import type {
   CapabilityOption,
   DeveloperStatus,
   PackageClientInspection,
+  PackageManifestSummary,
+  PackageOperationSummary,
+  PackageProviderSummary,
   PackageValidationResult,
   PublishForm,
 } from '../lib/types';
@@ -73,6 +76,99 @@ function SummaryList({ title, tone, items, emptyLabel }: { title: string; tone: 
           {items.map((item) => <div key={`${title}-${item}`} className="publish-summary-item">• {item}</div>)}
         </div>
       )}
+    </div>
+  );
+}
+
+
+function OperationContractList({ operations }: { operations: PackageOperationSummary[] }) {
+  if (operations.length === 0) {
+    return <div className="publish-summary-empty">No operations declared in manifest.</div>;
+  }
+  return (
+    <div className="publish-contract-list">
+      {operations.map((operation) => (
+        <div key={operation.operation_key} className="publish-contract-item">
+          <div className="publish-contract-title-row">
+            <span className="dval-mono">{operation.operation_key}</span>
+            {operation.capability_key ? <span className="tag">{operation.capability_key}</span> : <span className="tag tag-soft">missing capability</span>}
+          </div>
+          <div className="publish-contract-sub">{operation.display_name || operation.description || 'No display name provided.'}</div>
+          <div className="publish-file-list">
+            {operation.default_model_key ? <span className="tag tag-soft">default model · {operation.default_model_key}</span> : <span className="tag tag-soft">no default model</span>}
+            {operation.default_provider_key ? <span className="tag tag-soft">default provider · {operation.default_provider_key}</span> : null}
+            {(operation.accepted_model_families || []).map((family) => <span key={`${operation.operation_key}-family-${family}`} className="tag tag-soft">family · {family}</span>)}
+            {operation.allow_user_model_override != null ? <span className="tag tag-soft">user override · {String(operation.allow_user_model_override)}</span> : null}
+            {operation.allow_cross_plugin_models != null ? <span className="tag tag-soft">cross-plugin models · {String(operation.allow_cross_plugin_models)}</span> : null}
+          </div>
+          {operation.suggested_model_keys.length ? (
+            <div className="publish-file-list">
+              {operation.suggested_model_keys.map((modelKey) => <span key={`${operation.operation_key}-model-${modelKey}`} className="tag">{modelKey}</span>)}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProviderContractList({ providers }: { providers: PackageProviderSummary[] }) {
+  if (providers.length === 0) {
+    return <div className="publish-summary-empty">No providers declared in manifest.</div>;
+  }
+  return (
+    <div className="publish-contract-list">
+      {providers.map((provider) => (
+        <div key={provider.provider_key} className="publish-contract-item">
+          <div className="publish-contract-title-row">
+            <span className="dval-mono">{provider.provider_key}</span>
+            {provider.runtime_family ? <span className="tag">{provider.runtime_family}</span> : <span className="tag tag-soft">runtime missing</span>}
+          </div>
+          <div className="publish-contract-sub">{provider.display_name || 'No display name provided.'}</div>
+          <div className="publish-file-list">
+            {(provider.operation_keys || []).map((operationKey) => <span key={`${provider.provider_key}-operation-${operationKey}`} className="tag tag-soft">op · {operationKey}</span>)}
+            {(provider.default_for_operations || []).map((operationKey) => <span key={`${provider.provider_key}-default-${operationKey}`} className="tag">default · {operationKey}</span>)}
+            {(provider.supported_model_families || []).map((family) => <span key={`${provider.provider_key}-family-${family}`} className="tag tag-soft">family · {family}</span>)}
+            {provider.side_engine_key ? <span className="tag tag-soft">side engine · {provider.side_engine_key}</span> : null}
+          </div>
+          {provider.requested_permissions.length ? (
+            <div className="publish-file-list">
+              {provider.requested_permissions.map((permission) => <span key={`${provider.provider_key}-permission-${permission}`} className="tag tag-soft">{permission}</span>)}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ContractOverviewCards({ manifest }: { manifest: PackageManifestSummary | null | undefined }) {
+  if (!manifest) return null;
+  return (
+    <div className="validation-grid publish-contract-grid">
+      <div className="validation-card">
+        <div className="validation-title">Operations</div>
+        <div className="helper-note" style={{ marginBottom: 10 }}>The package now publishes operations as the canonical contract. Legacy flows remain backend-compatible only.</div>
+        <OperationContractList operations={manifest.operations} />
+      </div>
+      <div className="validation-card">
+        <div className="validation-title">Providers</div>
+        <div className="helper-note" style={{ marginBottom: 10 }}>Providers define executable backends, runtime family, operation coverage and effective permissions.</div>
+        <ProviderContractList providers={manifest.providers} />
+      </div>
+      <div className="validation-card">
+        <div className="validation-title">Contract consistency</div>
+        <div className="drow"><span className="dkey">operation count</span><span className="dval">{manifest.operation_count}</span></div>
+        <div className="drow"><span className="dkey">provider count</span><span className="dval">{manifest.provider_count}</span></div>
+        <div className="drow"><span className="dkey">capabilities</span><span className="dval">{manifest.capabilities.length ? manifest.capabilities.join(', ') : '—'}</span></div>
+        {manifest.manifest_consistency_warnings.length ? (
+          <div className="publish-inline-notes">
+            {manifest.manifest_consistency_warnings.map((warning) => <div key={warning} className="publish-inline-note warn">• {warning}</div>)}
+          </div>
+        ) : (
+          <div className="publish-summary-empty">No contract consistency issues detected.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -187,6 +283,9 @@ export function PublishPage({
   const packageWarnings = uniq([...(packageInspection?.warnings || []), ...(packageValidation?.warnings || [])]);
   const packageErrors = uniq([...(packageInspection?.errors || []), ...(packageValidation?.errors || [])]);
   const declaredCapabilities = manifest?.capabilities || [];
+  const declaredOperations = manifest?.operations || [];
+  const declaredProviders = manifest?.providers || [];
+  const consistencyWarnings = manifest?.manifest_consistency_warnings || [];
   const signatureStatus = packageValidation?.signature?.status || packageInspection?.signature.status || 'pending';
   const signatureKeyId = packageValidation?.signature?.key_id || packageInspection?.signature.key_id || null;
   const signatureAlgorithm = packageValidation?.signature?.algorithm || packageInspection?.signature.algorithm || null;
@@ -211,6 +310,8 @@ export function PublishPage({
     { label: 'Plugin', value: `${manifest?.plugin_key || '—'} ${manifest?.version ? `v${manifest.version}` : ''}`.trim() },
     { label: 'Channel', value: publishForm.releaseChannel },
     { label: 'Capabilities', value: publishForm.capabilities.length ? publishForm.capabilities.join(', ') : '—' },
+    { label: 'Operations', value: declaredOperations.length ? String(declaredOperations.length) : '—' },
+    { label: 'Providers', value: declaredProviders.length ? String(declaredProviders.length) : '—' },
     { label: 'Entitlement', value: publishForm.entitlementPolicy },
     { label: 'Signature', value: signatureStatus },
     { label: 'Developer key', value: developerKeyStatus },
@@ -295,6 +396,8 @@ export function PublishPage({
                   <div className="drow"><span className="dkey">display_name</span><span className="dval">{manifest?.display_name || '—'}</span></div>
                   <div className="drow"><span className="dkey">publisher</span><span className="dval">{developerStatus.publisher?.display_name || developerStatus.publisher?.slug || '—'}</span></div>
                   <div className="drow"><span className="dkey">declared capabilities</span><div className="publish-file-list">{declaredCapabilities.length ? declaredCapabilities.map((capability) => <span key={capability} className="tag">{capability}</span>) : <span className="tag tag-soft">—</span>}</div></div>
+                  <div className="drow"><span className="dkey">operations</span><span className="dval">{declaredOperations.length || '—'}</span></div>
+                  <div className="drow"><span className="dkey">providers</span><span className="dval">{declaredProviders.length || '—'}</span></div>
                   <div className="drow"><span className="dkey">os_support</span><div className="publish-file-list">{osSupport.length ? osSupport.map((item) => <span key={item} className="tag">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                   <div className="drow"><span className="dkey">permissions</span><div className="publish-file-list">{permissions.length ? permissions.map((item) => <span key={item} className="tag tag-soft">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                 </div>
@@ -307,12 +410,15 @@ export function PublishPage({
                   <div className="drow"><span className="dkey">dev key status</span><Badge value={developerKeyStatus} /></div>
                   <div className="drow"><span className="dkey">detected channel</span><Badge value={detectedChannel} /></div>
                   <div className="drow"><span className="dkey">security scan</span><Badge value={packageValidation?.security_scan_status || (packageWarnings.length ? 'warning' : 'pending')} /></div>
+                  <div className="drow"><span className="dkey">contract warnings</span><span className="dval">{consistencyWarnings.length}</span></div>
                   <div className="publish-inline-notes">
                     {packageWarnings.map((warning) => <div key={warning} className="publish-inline-note warn">• {warning}</div>)}
                     {packageErrors.map((error) => <div key={error} className="publish-inline-note err">• {error}</div>)}
                   </div>
                 </div>
               </div>
+
+              <ContractOverviewCards manifest={manifest} />
 
               <div className="publish-stage-actions">
                 <button type="button" className="btn btn-secondary" onClick={onCapabilityRefresh} disabled={isBusy('capabilities') || isBusy('package-validate')}>
@@ -405,7 +511,7 @@ export function PublishPage({
                     onChange={(next) => setPublishForm((current) => ({ ...current, capabilities: next }))}
                     loading={isBusy('capabilities')}
                   />
-                  <span className="field-hint">Only the capabilities you explicitly choose here are submitted. No inferred extras are added from flows.</span>
+                  <span className="field-hint">Only the capabilities you explicitly choose here are submitted. No inferred extras are added from operations.</span>
                 </div>
               </div>
 
@@ -486,6 +592,8 @@ export function PublishPage({
                   );
                 })}
               </div>
+
+              {manifest ? <div className="validation-card"><div className="validation-title">Operation contract snapshot</div><div className="publish-file-list">{declaredOperations.map((operation) => <span key={operation.operation_key} className="tag">{operation.operation_key}</span>)}{declaredProviders.map((provider) => <span key={provider.provider_key} className="tag tag-soft">provider · {provider.provider_key}</span>)}</div></div> : null}
 
               <div className="validation-card publish-submit-summary">
                 <div className="validation-title">Submit summary</div>

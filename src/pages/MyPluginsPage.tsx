@@ -1,7 +1,7 @@
 import { Badge } from '../components/common/Badge';
 import { Spinner } from '../components/common/Spinner';
 import { PluginCardGrid } from '../components/plugins/PluginCardGrid';
-import type { PublisherPlugin, PublisherRelease } from '../lib/types';
+import type { PackageOperationSummary, PackageProviderSummary, PublisherPlugin, PublisherRelease } from '../lib/types';
 import { fmtDT } from '../lib/utils';
 
 function isPluginInactive(plugin: PublisherPlugin | null | undefined) {
@@ -33,6 +33,50 @@ function PluginActions({
       <button className="btn btn-danger btn-sm" onClick={() => onDeletePlugin(plugin)} disabled={isBusy(deleteBusyKey)}>
         {isBusy(deleteBusyKey) ? <Spinner /> : 'Delete'}
       </button>
+    </div>
+  );
+}
+
+
+function PluginOperationSummary({ operations }: { operations: PackageOperationSummary[] }) {
+  if (!operations.length) return <div className="stack-empty">No operations declared.</div>;
+  return (
+    <div className="publish-contract-list">
+      {operations.map((operation) => (
+        <div key={operation.operation_key} className="publish-contract-item">
+          <div className="publish-contract-title-row">
+            <span className="dval-mono">{operation.operation_key}</span>
+            {operation.capability_key ? <span className="tag">{operation.capability_key}</span> : null}
+          </div>
+          <div className="publish-contract-sub">{operation.display_name || operation.description || 'No display name provided.'}</div>
+          <div className="publish-file-list">
+            {operation.default_model_key ? <span className="tag tag-soft">default model · {operation.default_model_key}</span> : null}
+            {operation.default_provider_key ? <span className="tag tag-soft">default provider · {operation.default_provider_key}</span> : null}
+            {operation.suggested_model_keys.map((modelKey) => <span key={`${operation.operation_key}-model-${modelKey}`} className="tag tag-soft">{modelKey}</span>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PluginProviderSummary({ providers }: { providers: PackageProviderSummary[] }) {
+  if (!providers.length) return <div className="stack-empty">No providers declared.</div>;
+  return (
+    <div className="publish-contract-list">
+      {providers.map((provider) => (
+        <div key={provider.provider_key} className="publish-contract-item">
+          <div className="publish-contract-title-row">
+            <span className="dval-mono">{provider.provider_key}</span>
+            {provider.runtime_family ? <span className="tag">{provider.runtime_family}</span> : null}
+          </div>
+          <div className="publish-file-list">
+            {provider.operation_keys.map((operationKey) => <span key={`${provider.provider_key}-op-${operationKey}`} className="tag tag-soft">op · {operationKey}</span>)}
+            {provider.default_for_operations.map((operationKey) => <span key={`${provider.provider_key}-default-${operationKey}`} className="tag">default · {operationKey}</span>)}
+            {provider.supported_model_families.map((family) => <span key={`${provider.provider_key}-family-${family}`} className="tag tag-soft">family · {family}</span>)}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -189,6 +233,22 @@ export function MyPluginsPage({
                   {(selectedMyPlugin.install_policy_badges || []).map((tag) => <span key={tag} className="tag tag-soft">{tag}</span>)}
                   {(selectedMyPlugin.release_channel_badges || []).map((tag) => <span key={tag} className="tag tag-soft">{tag}</span>)}
                 </div>
+                <div className="validation-list-grid">
+                  <div className="stack-list compact">
+                    <div className="stack-head">Operations</div>
+                    <PluginOperationSummary operations={selectedMyPlugin.operations || []} />
+                  </div>
+                  <div className="stack-list compact">
+                    <div className="stack-head">Providers</div>
+                    <PluginProviderSummary providers={selectedMyPlugin.providers || []} />
+                  </div>
+                </div>
+                {selectedMyPlugin.manifest?.manifest_consistency_warnings?.length ? (
+                  <div className="stack-list warn compact">
+                    <div className="stack-head">Manifest consistency</div>
+                    {selectedMyPlugin.manifest.manifest_consistency_warnings.map((warning) => <div key={warning} className="stack-item">{warning}</div>)}
+                  </div>
+                ) : null}
                 {(selectedMyPlugin.policy_warnings?.length || selectedMyPlugin.commercial_warnings?.length) ? (
                   <div className="validation-list-grid">
                     <div className="stack-list warn">
