@@ -152,13 +152,7 @@ function parseJson(text: string | null) {
 }
 
 function collectCapabilities(manifest: Record<string, unknown>) {
-  const flows = Array.isArray(manifest.flows) ? manifest.flows : [];
-  const fromFlows = flows
-    .map((flow) => asRecord(flow).primary_capability)
-    .map((value) => String(value ?? '').trim())
-    .filter(Boolean);
-  const direct = asStringList(manifest.capabilities);
-  return [...new Set([...fromFlows, ...direct])];
+  return asStringList(manifest.capabilities);
 }
 
 function collectOsSupport(manifest: Record<string, unknown>, packageMetadata: Record<string, unknown>) {

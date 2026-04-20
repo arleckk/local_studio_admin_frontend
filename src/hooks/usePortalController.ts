@@ -489,7 +489,7 @@ export function usePortalController() {
       manifest: validation.manifest || inspection.manifest,
       plugin_key: validation.plugin_key || inspection.manifest?.plugin_key || null,
       capabilities: canonicalizeCapabilityValues(
-        (validation.capabilities?.length ? validation.capabilities : inspection.manifest?.capabilities) || [],
+        inspection.manifest?.capabilities || validation.capabilities || [],
         capabilityOptions,
       ),
       detected_channel: detectedChannel,
@@ -656,6 +656,12 @@ export function usePortalController() {
       throw new Error('No backend endpoint accepted developer key revocation yet.');
     });
     if (!ok) return;
+    setDeveloperKeys((current) => current.filter((item) => item.key_id !== keyId));
+    setDeveloperStatus((current) => ({
+      ...current,
+      active_key_id: current.active_key_id === keyId ? null : current.active_key_id,
+      signing_keys_registered: Math.max(0, (current.signing_keys_registered ?? 0) - 1),
+    }));
     toast('ok', `Key ${keyId} revoked.`);
     await loadDeveloperHub();
   }, [auth, loadDeveloperHub, toast]);

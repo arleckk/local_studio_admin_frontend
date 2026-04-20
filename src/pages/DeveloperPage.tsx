@@ -268,10 +268,15 @@ export function DeveloperPage({
   const [signingOpen, setSigningOpen] = useState(true);
   const [platform, setPlatform] = useState<PlatformKey>('windows');
 
-  const registeredKeys = developerStatus.signing_keys_registered ?? developerKeys.length;
-  const activeKeyId = developerStatus.active_key_id || null;
-  const activeKeys = developerKeys.filter((item) => (item.status || '').toLowerCase() === 'active').length;
   const revokedKeys = developerKeys.filter((item) => (item.status || '').toLowerCase() === 'revoked').length;
+  const visibleDeveloperKeys = useMemo(
+    () => developerKeys.filter((item) => (item.status || '').toLowerCase() !== 'revoked'),
+    [developerKeys],
+  );
+  const registeredKeys = visibleDeveloperKeys.length;
+  const rawActiveKeyId = developerStatus.active_key_id || null;
+  const activeKeyId = visibleDeveloperKeys.some((item) => item.key_id === rawActiveKeyId) ? rawActiveKeyId : null;
+  const activeKeys = visibleDeveloperKeys.filter((item) => (item.status || '').toLowerCase() === 'active').length;
 
   const selectedInstructions = useMemo(() => platformInstructions[platform], [platform]);
 
@@ -538,21 +543,30 @@ export function DeveloperPage({
             </div>
           </div>
 
-          {developerKeys.length === 0 ? (
+          {visibleDeveloperKeys.length === 0 ? (
             <div className="empty">
               <div className="empty-icon">⌘</div>
-              <div className="empty-title">No public keys registered</div>
-              <div className="empty-sub">Register your first public key here, then sign packages on your developer machine or CI.</div>
+              <div className="empty-title">No active public keys registered</div>
+              <div className="empty-sub">
+                {revokedKeys > 0
+                  ? 'Revoked keys are hidden from this list after a successful revoke. Register a new key to keep signing packages.'
+                  : 'Register your first public key here, then sign packages on your developer machine or CI.'}
+              </div>
             </div>
           ) : (
             <div className="card-body vstack">
               <div className="developer-inline-list">
-                <span className="tag">{developerKeys.length} total</span>
+                <span className="tag">{registeredKeys} registered</span>
                 <span className="tag">{activeKeys} active</span>
                 <span className="tag">{revokedKeys} revoked</span>
               </div>
+              {revokedKeys > 0 ? (
+                <div className="alert alert-info" style={{ marginBottom: 0 }}>
+                  Revoked keys are hidden from this list after a successful revoke.
+                </div>
+              ) : null}
               <div className="key-card-grid">
-                {developerKeys.map((item) => (
+                {visibleDeveloperKeys.map((item) => (
                   <KeyCard
                     key={item.key_id}
                     item={item}

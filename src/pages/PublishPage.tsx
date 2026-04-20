@@ -186,7 +186,7 @@ export function PublishPage({
   const detectedChannel = packageValidation?.detected_channel || packageInspection?.package_metadata?.distribution_channel || manifest?.declared_channel || publishForm.releaseChannel;
   const packageWarnings = uniq([...(packageInspection?.warnings || []), ...(packageValidation?.warnings || [])]);
   const packageErrors = uniq([...(packageInspection?.errors || []), ...(packageValidation?.errors || [])]);
-  const capabilities = uniq([...(manifest?.capabilities || []), ...(packageValidation?.capabilities || [])]);
+  const declaredCapabilities = manifest?.capabilities || [];
   const signatureStatus = packageValidation?.signature?.status || packageInspection?.signature.status || 'pending';
   const signatureKeyId = packageValidation?.signature?.key_id || packageInspection?.signature.key_id || null;
   const signatureAlgorithm = packageValidation?.signature?.algorithm || packageInspection?.signature.algorithm || null;
@@ -210,6 +210,7 @@ export function PublishPage({
   const summaryItems = useMemo(() => ([
     { label: 'Plugin', value: `${manifest?.plugin_key || '—'} ${manifest?.version ? `v${manifest.version}` : ''}`.trim() },
     { label: 'Channel', value: publishForm.releaseChannel },
+    { label: 'Capabilities', value: publishForm.capabilities.length ? publishForm.capabilities.join(', ') : '—' },
     { label: 'Entitlement', value: publishForm.entitlementPolicy },
     { label: 'Signature', value: signatureStatus },
     { label: 'Developer key', value: developerKeyStatus },
@@ -293,7 +294,7 @@ export function PublishPage({
                   <div className="drow"><span className="dkey">version</span><span className="dval-mono">{manifest?.version || '—'}</span></div>
                   <div className="drow"><span className="dkey">display_name</span><span className="dval">{manifest?.display_name || '—'}</span></div>
                   <div className="drow"><span className="dkey">publisher</span><span className="dval">{developerStatus.publisher?.display_name || developerStatus.publisher?.slug || '—'}</span></div>
-                  <div className="drow"><span className="dkey">flows</span><div className="publish-file-list">{capabilities.length ? capabilities.map((capability) => <span key={capability} className="tag">{capability}</span>) : <span className="tag tag-soft">—</span>}</div></div>
+                  <div className="drow"><span className="dkey">declared capabilities</span><div className="publish-file-list">{declaredCapabilities.length ? declaredCapabilities.map((capability) => <span key={capability} className="tag">{capability}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                   <div className="drow"><span className="dkey">os_support</span><div className="publish-file-list">{osSupport.length ? osSupport.map((item) => <span key={item} className="tag">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                   <div className="drow"><span className="dkey">permissions</span><div className="publish-file-list">{permissions.length ? permissions.map((item) => <span key={item} className="tag tag-soft">{item}</span>) : <span className="tag tag-soft">—</span>}</div></div>
                 </div>
@@ -404,7 +405,7 @@ export function PublishPage({
                     onChange={(next) => setPublishForm((current) => ({ ...current, capabilities: next }))}
                     loading={isBusy('capabilities')}
                   />
-                  <span className="field-hint">Preloaded from flows[].primary_capability.</span>
+                  <span className="field-hint">Only the capabilities you explicitly choose here are submitted. No inferred extras are added from flows.</span>
                 </div>
               </div>
 
